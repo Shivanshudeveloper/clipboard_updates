@@ -5,8 +5,7 @@ mod commands;
 mod command;
 mod auth; // ✅ added missing semicolon here!
 mod session;
-
-
+mod updater;
 
 use tauri::{
     Manager, Emitter,
@@ -35,7 +34,14 @@ get_current_purge_settings,
 update_purge_cadence,
 logout_user,
 update_auto_purge_settings,
+check_for_updates,
+install_update,
+download_update,
+install_downloaded_update,
+cancel_update,
 };
+use tauri::async_runtime::Mutex;
+use crate::updater::Updater; 
 use crate::commands::clipboard::start_clipboard_monitoring;
 
 use crate::db::database::{create_db_pool, create_tables}; // ✅ use explicit path
@@ -68,6 +74,7 @@ async fn main() {
 
     tauri::Builder::default()
         .manage(db_pool.clone())
+        .manage(Mutex::new(Option::<Updater>::None))
         .setup(move |app| {
             let app_handle = app.handle().clone();
             let pool_for_test = db_pool.clone();
@@ -176,6 +183,11 @@ async fn main() {
             get_current_purge_settings,
             update_purge_cadence,
             update_auto_purge_settings,
+            check_for_updates,
+            install_update,
+            download_update,
+install_downloaded_update,
+cancel_update,
             open_tags_window,
             resize_window,
             send_test_event,

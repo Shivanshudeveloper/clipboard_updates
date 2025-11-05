@@ -14,6 +14,9 @@ use sqlx::PgPool;
 use tauri_plugin_updater::UpdaterExt;
 use std::time::Duration;
 use tauri::Emitter;
+use tauri::AppHandle;
+use tauri::async_runtime::Mutex;
+use crate::updater::{Updater, UpdateCheckResult,  InstallerInfo};
 
 #[tauri::command]
 pub async fn debug_get_specific_fields() -> serde_json::Value {
@@ -646,7 +649,6 @@ pub async fn update_auto_purge_settings(
 
 //Updater Commands
 
-// Silent auto-update checker - no commands exposed to frontend
 pub fn setup_silent_auto_updater(app: &tauri::AppHandle) {
     let app_handle = app.clone();
     
@@ -658,8 +660,9 @@ pub fn setup_silent_auto_updater(app: &tauri::AppHandle) {
             eprintln!("Silent auto-update failed: {}", e);
         }
     });
+
+
     
-    // Also check every 24 hours
     let app_handle_periodic = app.clone();
     tokio::spawn(async move {
         loop {
@@ -703,4 +706,70 @@ pub async fn check_and_install_update_silently(app: &tauri::AppHandle) -> Result
             Ok(()) // Don't fail, just log and continue
         }
     }
+}
+
+
+
+
+
+#[tauri::command]
+pub async fn check_for_updates(_app_handle: AppHandle) -> Result<UpdateCheckResult, String> {
+    // Replace with your actual GitHub info
+    let updater = Updater::new("Shivanshudeveloper", "clipboard_updates", "0.1.7");
+    let result = updater.check_for_updates().await;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn install_update(app_handle: AppHandle, download_url: String) -> Result<(), String> {
+    let updater = Updater::new("Shivanshudeveloper", "clipboard_updates", "0.1.7");
+    updater.download_and_install(download_url, app_handle).await
+}
+
+// New commands for in-app downloading:
+#[tauri::command]
+pub async fn download_update(
+    app_handle: AppHandle,
+    download_url: String,
+    updater_state: State<'_, Mutex<Option<Updater>>>,
+) -> Result<InstallerInfo, String> {
+    let mut updater_guard = updater_state.lock().await; // Use .await instead of .unwrap()
+    
+    if updater_guard.is_none() {
+        *updater_guard = Some(Updater::new("Shivanshudeveloper", "clipboard_updates", "0.1.7"));
+    }
+    
+    if let Some(updater) = updater_guard.as_mut() {
+        updater.download_update(download_url, app_handle).await
+    } else {
+        Err("Updater not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn install_downloaded_update(
+    installer_info: InstallerInfo,
+    updater_state: State<'_, Mutex<Option<Updater>>>,
+) -> Result<(), String> {
+    let updater_guard = updater_state.lock().await; // Use .await instead of .unwrap()
+    
+    if let Some(updater) = updater_guard.as_ref() {
+        updater.install_downloaded_update(installer_info).await
+    } else {
+        Err("Updater not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn cancel_update(
+    updater_state: State<'_, Mutex<Option<Updater>>>,
+) -> Result<(), String> {
+    let mut updater_guard = updater_state.lock().await; // Use .await instead of .unwrap()
+    
+    if let Some(updater) = updater_guard.as_mut() {
+        updater.cleanup();
+    }
+    *updater_guard = None;
+    
+    Ok(())
 }

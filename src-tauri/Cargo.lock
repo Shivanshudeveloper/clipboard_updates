@@ -562,11 +562,12 @@ dependencies = [
 
 [[package]]
 name = "cliptray"
-version = "0.1.0"
+version = "0.1.7"
 dependencies = [
  "arboard",
  "chrono",
  "dotenv",
+ "futures-util",
  "jsonwebtoken",
  "log",
  "md5",
@@ -574,6 +575,7 @@ dependencies = [
  "rand 0.8.5",
  "reqwest",
  "rs-firebase-admin-sdk",
+ "semver",
  "serde",
  "serde_json",
  "sqlx",
