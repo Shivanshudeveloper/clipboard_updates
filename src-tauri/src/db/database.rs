@@ -1,0 +1,415 @@
+// src/db/database.rs
+use sqlx::{PgPool, postgres::PgPoolOptions};
+use std::env;
+use crate::db::schemas::{ClipboardEntry, NewClipboardEntry, UpdateClipboardEntry};
+use serde_json;
+
+pub async fn create_db_pool() -> Result<PgPool, Box<dyn std::error::Error>> {
+    // Load .env file
+    dotenv::dotenv().ok();
+    
+    // let database_url = env::var("DATABASE_URL")
+        let database_url = "postgresql://neondb_owner:npg_iu1eMYPHfAV8@ep-young-bush-affo5mc7-pooler.c-2.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
+    
+    println!("🔗 Connecting to database...");
+    
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await?;
+    
+    // Simple connection test
+    sqlx::query("SELECT 1")
+        .execute(&pool)
+        .await?;
+    
+    println!("✅ Database connected successfully!");
+    
+    // Create tables if they don't exist
+    create_tables(&pool).await?;
+    
+    Ok(pool)
+}
+
+pub async fn create_tables(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
+    println!("📝 Creating clipboard table if not exists...");
+    
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS clipboard_entries (
+            id BIGSERIAL PRIMARY KEY,
+            content TEXT NOT NULL,
+            content_type VARCHAR(50) NOT NULL DEFAULT 'text',
+            content_hash VARCHAR(64) UNIQUE NOT NULL,
+            source_app VARCHAR(255) NOT NULL,
+            source_window VARCHAR(255) NOT NULL,
+            timestamp TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            tags TEXT,
+            is_pinned BOOLEAN NOT NULL DEFAULT FALSE
+        )
+        "#
+    )
+    .execute(pool)
+    .await?;
+    
+    // Create index for better performance
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_clipboard_content_hash ON clipboard_entries(content_hash)"
+    )
+    .execute(pool)
+    .await?;
+    
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_clipboard_created_at ON clipboard_entries(created_at DESC)"
+    )
+    .execute(pool)
+    .await?;
+    
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_clipboard_source_app ON clipboard_entries(source_app)"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS users (
+            id BIGSERIAL PRIMARY KEY,
+            firebase_uid TEXT UNIQUE NOT NULL,
+            email TEXT NOT NULL,
+            display_name TEXT,
+            photo_url TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_login_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#
+    )
+    .execute(pool)
+    .await?;
+
+    // === Indexes ===
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid)"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)"
+    )
+    .execute(pool)
+    .await?;
+    
+    println!("✅ Database tables ready!");
+    Ok(())
+}
+
+// In your database.rs file, update the helper functions
+pub fn tags_to_json(tag_names: &[String]) -> Option<String> {
+    if tag_names.is_empty() {
+        None
+    } else {
+        match serde_json::to_string(tag_names) {
+            Ok(json) => Some(json),
+            Err(_) => None,
+        }
+    }
+}
+
+pub fn json_to_tags(tags_json: &Option<String>) -> Vec<String> {
+    match tags_json {
+        Some(json) => {
+            serde_json::from_str(json).unwrap_or_else(|_| Vec::new())
+        }
+        None => Vec::new(),
+    }
+}
+
+
+// Clipboard operations
+pub struct ClipboardRepository;
+
+impl ClipboardRepository {
+    pub async fn save_entry(
+        pool: &PgPool, 
+        entry: NewClipboardEntry
+    ) -> Result<ClipboardEntry, Box<dyn std::error::Error>> {
+        let result = sqlx::query_as::<_, ClipboardEntry>(
+            r#"
+            INSERT INTO clipboard_entries 
+            (content, content_type, content_hash, source_app, source_window, timestamp, tags,user_id, organization_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING *
+            "#
+        )
+        .bind(entry.content)
+        .bind(entry.content_type)
+        .bind(entry.content_hash)
+        .bind(entry.source_app)
+        .bind(entry.source_window)
+        .bind(entry.timestamp)
+        .bind(entry.tags)
+        .bind(entry.user_id) 
+        .bind(entry.organization_id)     
+        .fetch_one(pool)
+        .await?;
+        
+        Ok(result)
+    }
+
+    pub async fn get_by_organization(
+        pool: &PgPool, 
+        organization_id: &str,
+        limit: Option<i64>
+    ) -> Result<Vec<ClipboardEntry>, Box<dyn std::error::Error>> {
+        let limit = limit.unwrap_or(100);
+        
+        let results = sqlx::query_as::<_, ClipboardEntry>(
+            "SELECT * FROM clipboard_entries WHERE organization_id = $1 ORDER BY created_at DESC LIMIT $2"
+        )
+        .bind(organization_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+        
+        Ok(results)
+    }
+    
+    pub async fn get_by_id(
+        pool: &PgPool, 
+        id: i64
+    ) -> Result<Option<ClipboardEntry>, Box<dyn std::error::Error>> {
+        let result = sqlx::query_as::<_, ClipboardEntry>(
+            "SELECT * FROM clipboard_entries WHERE id = $1"
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        
+        Ok(result)
+    }
+    
+    pub async fn get_all(
+        pool: &PgPool, 
+        limit: Option<i64>
+    ) -> Result<Vec<ClipboardEntry>, Box<dyn std::error::Error>> {
+        let limit = limit.unwrap_or(100);
+        
+        let results = sqlx::query_as::<_, ClipboardEntry>(
+            "SELECT * FROM clipboard_entries ORDER BY created_at DESC LIMIT $1"
+        )
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+        
+        Ok(results)
+    }
+    
+    pub async fn get_recent(
+        pool: &PgPool, 
+        hours: i32
+    ) -> Result<Vec<ClipboardEntry>, Box<dyn std::error::Error>> {
+        let results = sqlx::query_as::<_, ClipboardEntry>(
+            "SELECT * FROM clipboard_entries WHERE created_at > NOW() - INTERVAL '1 hour' * $1 ORDER BY created_at DESC"
+        )
+        .bind(hours)
+        .fetch_all(pool)
+        .await?;
+        
+        Ok(results)
+    }
+    
+    pub async fn search_content(
+        pool: &PgPool, 
+        query: &str
+    ) -> Result<Vec<ClipboardEntry>, Box<dyn std::error::Error>> {
+        let search_pattern = format!("%{}%", query);
+        
+        let results = sqlx::query_as::<_, ClipboardEntry>(
+            "SELECT * FROM clipboard_entries WHERE content ILIKE $1 ORDER BY created_at DESC"
+        )
+        .bind(search_pattern)
+        .fetch_all(pool)
+        .await?;
+        
+        Ok(results)
+    }
+    
+    pub async fn update_entry(
+        pool: &PgPool, 
+        id: i64, 
+        update: UpdateClipboardEntry
+    ) -> Result<ClipboardEntry, Box<dyn std::error::Error>> {
+        let result = sqlx::query_as::<_, ClipboardEntry>(
+            r#"
+            UPDATE clipboard_entries 
+            SET 
+                is_pinned = COALESCE($1, is_pinned),
+                tags = COALESCE($2, tags)
+            WHERE id = $3
+            RETURNING *
+            "#
+        )
+        .bind(update.is_pinned)
+        .bind(update.tags)
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+        
+        Ok(result)
+    }
+    
+    pub async fn delete_entry(
+        pool: &PgPool, 
+        id: i64
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let result = sqlx::query(
+            "DELETE FROM clipboard_entries WHERE id = $1"
+        )
+        .bind(id)
+        .execute(pool)
+        .await?;
+        
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn update_entry_content(
+        pool: &PgPool,
+        entry_id: i64,
+        new_content: &str,
+    ) -> Result<ClipboardEntry, Box<dyn std::error::Error>> {
+        let content_hash = {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            new_content.hash(&mut hasher);
+            format!("{:x}", hasher.finish())
+        };
+        
+        let result = sqlx::query_as::<_, ClipboardEntry>(
+            r#"
+            UPDATE clipboard_entries 
+            SET 
+                content = $1,
+                content_hash = $2,
+                timestamp = $3
+            WHERE id = $4
+            RETURNING *
+            "#
+        )
+        .bind(new_content)
+        .bind(content_hash)
+        .bind(chrono::Utc::now())
+        .bind(entry_id)
+        .fetch_one(pool)
+        .await?;
+        
+        Ok(result)
+    }
+    
+    pub async fn exists_by_hash(
+        pool: &PgPool, 
+        content_hash: &str
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let result = sqlx::query(
+            "SELECT 1 FROM clipboard_entries WHERE content_hash = $1 LIMIT 1"
+        )
+        .bind(content_hash)
+        .fetch_optional(pool)
+        .await?;
+        
+        Ok(result.is_some())
+    }
+
+     pub async fn assign_tag(
+        pool: &PgPool, 
+        clipboard_entry_id: i64, 
+        tag_name: &str // Change from tag_id to tag_name
+    ) -> Result<ClipboardEntry, Box<dyn std::error::Error>> {
+        // First get the current entry
+        let current_entry = Self::get_by_id(pool, clipboard_entry_id).await?
+            .ok_or("Clipboard entry not found")?;
+        
+        // Parse current tags (now they are names, not IDs)
+        let mut current_tags = json_to_tags(&current_entry.tags);
+        
+        // Add the new tag name if not already present
+        if !current_tags.contains(&tag_name.to_string()) {
+            current_tags.push(tag_name.to_string());
+        }
+        
+        // Convert back to JSON
+        let new_tags_json = tags_to_json(&current_tags);
+        
+        // Update the entry
+        let update = UpdateClipboardEntry {
+            tags: new_tags_json,
+            is_pinned: None,
+        };
+        
+        Self::update_entry(pool, clipboard_entry_id, update).await
+    }
+
+    pub async fn remove_tag(
+        pool: &PgPool, 
+        clipboard_entry_id: i64, 
+        tag_name: &str // Change from tag_id to tag_name
+    ) -> Result<ClipboardEntry, Box<dyn std::error::Error>> {
+        // First get the current entry
+        let current_entry = Self::get_by_id(pool, clipboard_entry_id).await?
+            .ok_or("Clipboard entry not found")?;
+        
+        // Parse current tags and remove the specified tag name
+        let mut current_tags = json_to_tags(&current_entry.tags);
+        current_tags.retain(|name| name != tag_name);
+        
+        // Convert back to JSON
+        let new_tags_json = tags_to_json(&current_tags);
+        
+        // Update the entry
+        let update = UpdateClipboardEntry {
+            tags: new_tags_json,
+            is_pinned: None,
+        };
+        
+        Self::update_entry(pool, clipboard_entry_id, update).await
+    }
+
+
+    //Settings coommands
+    pub async fn delete_entries_older_than(pool: &PgPool, organization_id: &str, days: i32) -> Result<usize, sqlx::Error> {
+        sqlx::query(
+            "DELETE FROM clipboard_entries WHERE organization_id = $1 AND created_at < NOW() - ($2 || ' days')::INTERVAL"
+        )
+        .bind(organization_id)
+        .bind(days.to_string()) // Convert to string here
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected() as usize)
+    }
+    
+    pub async fn delete_unpinned_older_than(pool: &PgPool, organization_id: &str, days: i32) -> Result<usize, sqlx::Error> {
+        sqlx::query(
+            "DELETE FROM clipboard_entries WHERE organization_id = $1 AND is_pinned = false AND created_at < NOW() - ($2 || ' days')::INTERVAL"
+        )
+        .bind(organization_id)
+        .bind(days.to_string()) // Convert to string here
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected() as usize)
+    }
+
+    pub async fn delete_unpinned_entries(pool: &PgPool, organization_id: &str) -> Result<usize, sqlx::Error> {
+        sqlx::query(
+            "DELETE FROM clipboard_entries WHERE organization_id = $1 AND is_pinned = false"
+        )
+        .bind(organization_id)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected() as usize)
+    }
+}
+
+

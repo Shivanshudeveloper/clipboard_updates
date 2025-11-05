@@ -1,0 +1,37 @@
+{
+    "name": "cliptray",
+    "private": true,
+    "version": "0.1.0",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "preview": "vite preview",
+        "tauri": "tauri",
+        "tauri:build": "tauri build"
+    },
+    "dependencies": {
+        "@tailwindcss/vite": "^4.1.14",
+        "@tauri-apps/api": "^2.8.0",
+        "@tauri-apps/plugin-app": "^2.0.0-alpha.1",
+        "@tauri-apps/plugin-opener": "^2.5.0",
+        "@tauri-apps/plugin-shell": "^2.3.1",
+        "@tauri-apps/plugin-window": "^2.0.0-alpha.1",
+        "firebase": "^12.4.0",
+        "lucide": "^0.545.0",
+        "lucide-react": "^0.545.0",
+        "react": "^19.2.0",
+        "react-dom": "^19.1.0",
+        "react-icons": "^5.5.0",
+        "react-router-dom": "^7.9.4",
+        "uuid": "^13.0.0"
+    },
+    "devDependencies": {
+        "@tauri-apps/cli": "^2",
+        "@vitejs/plugin-react": "^4.6.0",
+        "autoprefixer": "^10.4.21",
+        "postcss": "^8.5.6",
+        "tailwindcss": "^4.1.14",
+        "vite": "^7.1.9"
+    }
+}
