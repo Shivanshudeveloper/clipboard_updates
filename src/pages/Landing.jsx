@@ -403,7 +403,7 @@ const removeTagFromItem = async (itemId, tagName, e) => {
             <div className="w-5 h-5 rounded-md bg-gradient-to-r from-blue-500 to-blue-400 flex items-center justify-center text-white text-xs font-semibold">
               ⌘
             </div>
-            <h1 className="text-sm font-semibold text-gray-800">ClipTrau</h1>
+            <h1 className="text-sm font-semibold text-gray-800">ClipTray</h1>
 
 
           </div>
