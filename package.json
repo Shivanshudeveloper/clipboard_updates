@@ -8,7 +8,7 @@
         "build": "vite build",
         "preview": "vite preview",
         "tauri": "tauri",
-        "tauri:build": "tauri build"
+        "tauri:build": "cp .env src-tauri/.env || true && tauri build"
     },
     "dependencies": {
         "@tailwindcss/vite": "^4.1.14",

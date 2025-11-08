@@ -16,7 +16,6 @@ pub struct ClipboardEntry {
     pub created_at: DateTime<Utc>,    
     pub tags: Option<String>,        // JSON array of tags
     pub is_pinned: bool,
-    pub user_id:Option<String>,
     pub organization_id: Option<String>,
 }
 
@@ -29,7 +28,6 @@ pub struct NewClipboardEntry {
     pub source_window: String,
     pub timestamp: DateTime<Utc>,
     pub tags: Option<String>,
-    pub user_id: Option<String>,
     pub organization_id: Option<String>,
 }
 
@@ -57,7 +55,6 @@ impl NewClipboardEntry {
             source_window,
             timestamp: Utc::now(),
             tags: None,
-            user_id: None,
             organization_id:None, // Set to None initially
         }
     }

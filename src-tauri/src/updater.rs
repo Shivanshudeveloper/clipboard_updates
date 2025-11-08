@@ -264,73 +264,181 @@ impl Updater {
         })
     }
 
-    pub async fn install_downloaded_update(&self, installer_info: InstallerInfo) -> Result<(), String> {
-        // For now, just open the installer - in production you'd want proper installation logic
-        #[cfg(target_os = "windows")]
-        {
-            use std::process::Command;
+   pub async fn install_downloaded_update(&self, installer_info: InstallerInfo) -> Result<(), String> {
+    println!("🚀 Starting installation: {}", installer_info.file_path);
+    
+    // Normalize the file path and ensure it exists
+    let file_path = std::path::Path::new(&installer_info.file_path);
+    
+    if !file_path.exists() {
+        return Err(format!("Installer file not found: {}", installer_info.file_path));
+    }
+    
+    println!("📁 Installer exists: {}", file_path.exists());
+    println!("📁 File path: {:?}", file_path);
+    println!("📁 File name: {}", installer_info.file_name);
+    
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        
+        if installer_info.file_name.ends_with(".exe") {
+            println!("🔧 Running EXE installer...");
+            // For .exe files, run them directly with common silent flags
+            Command::new(&installer_info.file_path)
+                .args(&["/S", "/silent", "/norestart"])
+                .spawn()
+                .map_err(|e| format!("Failed to start EXE installer: {}", e))?;
+        } else if installer_info.file_name.ends_with(".msi") {
+            println!("🔧 Running MSI installer...");
+            // For .msi files, use msiexec
+            Command::new("msiexec")
+                .args(&["/i", &installer_info.file_path, "/quiet", "/norestart"])
+                .spawn()
+                .map_err(|e| format!("Failed to start MSI installer: {}", e))?;
+        } else {
+            println!("🔧 Opening installer with default program...");
+            // For other files, try to open with default program
             Command::new("cmd")
                 .args(&["/c", "start", "", &installer_info.file_path])
                 .spawn()
-                .map_err(|e| format!("Failed to start installer: {}", e))?;
-        }
-        
-        #[cfg(target_os = "macos")]
-        {
-            use std::process::Command;
-            Command::new("open")
-                .arg(&installer_info.file_path)
-                .spawn()
                 .map_err(|e| format!("Failed to open installer: {}", e))?;
         }
-        
-        #[cfg(target_os = "linux")]
-        {
-            use std::process::Command;
-            Command::new("xdg-open")
-                .arg(&installer_info.file_path)
-                .spawn()
-                .map_err(|e| format!("Failed to open installer: {}", e))?;
-        }
-        
-        Ok(())
     }
+    
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        Command::new("open")
+            .arg(&installer_info.file_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open installer: {}", e))?;
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+        Command::new("xdg-open")
+            .arg(&installer_info.file_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open installer: {}", e))?;
+    }
+    
+    println!("✅ Installation started successfully");
+    Ok(())
+}
 
-  pub async fn download_and_install(&self, download_url: String, app_handle: AppHandle) -> Result<(), String> {
-    // For Tauri 2.0, use the webview to open the URL
-    if let Some(window) = app_handle.get_webview_window("main") {
-        let js = format!("window.open('{}', '_blank');", download_url);
-        window.eval(&js)
-            .map_err(|e| format!("Failed to open download URL: {}", e))?;
-        Ok(())
-    } else {
-        // Fallback: use system command to open URL
-        #[cfg(target_os = "windows")]
-        let command = "cmd";
-        #[cfg(target_os = "windows")]
-        let args = ["/c", "start", ""];
-        
-        #[cfg(target_os = "macos")]
-        let command = "open";
-        #[cfg(target_os = "macos")]
-        let args: [&str; 0] = [];
-        
-        #[cfg(target_os = "linux")]
-        let command = "xdg-open";
-        #[cfg(target_os = "linux")]
-        let args: [&str; 0] = [];
-
-        let status = std::process::Command::new(command)
-            .args(&args)
-            .arg(&download_url)
-            .status()
-            .map_err(|e| format!("Failed to open URL: {}", e))?;
-
-        if status.success() {
+    pub async fn download_and_install(&self, download_url: String, app_handle: AppHandle) -> Result<(), String> {
+        // For Tauri 2.0, use the webview to open the URL
+        if let Some(window) = app_handle.get_webview_window("main") {
+            let js = format!("window.open('{}', '_blank');", download_url);
+            window.eval(&js)
+                .map_err(|e| format!("Failed to open download URL: {}", e))?;
             Ok(())
         } else {
-            Err("Failed to open download URL".to_string())
+            // Fallback: use system command to open URL
+            #[cfg(target_os = "windows")]
+            let command = "cmd";
+            #[cfg(target_os = "windows")]
+            let args = ["/c", "start", ""];
+            
+            #[cfg(target_os = "macos")]
+            let command = "open";
+            #[cfg(target_os = "macos")]
+            let args: [&str; 0] = [];
+            
+            #[cfg(target_os = "linux")]
+            let command = "xdg-open";
+            #[cfg(target_os = "linux")]
+            let args: [&str; 0] = [];
+
+            let status = std::process::Command::new(command)
+                .args(&args)
+                .arg(&download_url)
+                .status()
+                .map_err(|e| format!("Failed to open URL: {}", e))?;
+
+            if status.success() {
+                Ok(())
+            } else {
+                Err("Failed to open download URL".to_string())
+            }
         }
+    }
+
+    // MOVE THESE TWO METHODS INSIDE THE IMPL BLOCK:
+
+   pub async fn auto_update(&mut self, app_handle: AppHandle) -> Result<bool, String> {
+    println!("🔍 Checking if auto-update should proceed...");
+    
+    let update_result = self.check_for_updates().await;
+    
+    if !update_result.available {
+        println!("✅ No updates available - skipping auto-update");
+        return Ok(false);
+    }
+    
+    println!("🎯 Update available: {} -> {}", update_result.current_version, update_result.latest_version);
+    
+    // CRITICAL: Check if we're already trying to update to avoid loops
+    if update_result.current_version == "0.2.4" && update_result.latest_version == "0.2.4" {
+        println!("🔄 Already on version 0.2.4 - stopping update loop");
+        return Ok(false);
+    }
+    
+    let download_url = if !update_result.download_url.is_empty() {
+        update_result.download_url
+    } else {
+        update_result.release_url
+    };
+    
+    if download_url.is_empty() {
+        return Err("No download URL available".to_string());
+    }
+    
+    println!("📥 Downloading update...");
+    let installer_info = self.download_update(download_url, app_handle.clone()).await?;
+    
+    println!("🔧 Starting installation (will exit app)...");
+    
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        use tokio::time::{sleep, Duration};
+        
+        if installer_info.file_name.ends_with(".exe") {
+            println!("🚀 Launching installer and waiting 5 seconds...");
+            
+            // Launch installer
+            Command::new(&installer_info.file_path)
+                .args(&["/S"]) // Silent install
+                .spawn()
+                .map_err(|e| format!("Failed to start installer: {}", e))?;
+            
+            // Wait for installer to start
+            println!("⏳ Waiting for installer to initialize...");
+            sleep(Duration::from_secs(5)).await;
+            
+            println!("✅ Installer started, exiting application...");
+        }
+    }
+    
+    // Exit the app so installer can replace files
+    std::process::exit(0);
+    
+    Ok(true)
+}
+
+    pub async fn check_and_notify(&self, app_handle: AppHandle) {
+    let update_result = self.check_for_updates().await;
+    
+    if update_result.available {
+        println!("📢 Notifying about available update: {}", update_result.latest_version);
+        let _ = app_handle.emit("update-available", update_result);
+    } else if let Some(error) = update_result.error {
+        eprintln!("❌ Update check failed: {}", error);
+    } else {
+        println!("✅ App is up to date");
     }
 }
 

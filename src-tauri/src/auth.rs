@@ -22,6 +22,12 @@ pub async fn verify_firebase_token(id_token: &str) -> Result<(String, String, Op
     
     // let firebase_project_id = env::var("FIREBASE_PROJECT_ID")
         let firebase_project_id ="mealpro-development";
+    
+        // let firebase_project_id = env::var("FIREBASE_PROJECT_ID")
+        // .map_err(|e| format!("FIREBASE_PROJECT_ID environment variable not set: {}", e))?;
+
+    println!("🔐 Verifying token for project: {}", firebase_project_id);
+
 
     println!("🔐 Verifying token for project: {}", firebase_project_id);
 

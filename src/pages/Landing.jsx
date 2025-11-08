@@ -320,29 +320,29 @@ const assignTagToItem = async (itemId, tagId) => {
 };
 
 const removeTagFromItem = async (itemId, tagName, e) => {
-  e.stopPropagation();
-  
-  try {
-    console.log("🔴 REMOVING tag:", tagName, "from item:", itemId);
+    if (e) e.stopPropagation();
     
-    const updatedEntry = await invoke("remove_tag_from_entry", {
-      clipboardEntryId: parseInt(itemId),
-      tagName: tagName
-    });
-    
-    console.log("✅ Remove response:", updatedEntry);
-    
-    setLocalItems(prev => prev.map(item => 
-      item.id === parseInt(itemId) ? { 
-        ...item, 
-        tags: updatedEntry.tags 
-      } : item
-    ));
-    
-  } catch (err) {
-    console.error("❌ Failed to remove tag:", err);
-  }
-};
+    try {
+      console.log("🔴 REMOVING tag:", tagName, "from item:", itemId);
+      
+      const updatedEntry = await invoke("remove_tag_from_entry", {
+        clipboardEntryId: parseInt(itemId),
+        tagName: tagName
+      });
+      
+      console.log("✅ Remove response:", updatedEntry);
+      
+      setLocalItems(prev => prev.map(item => 
+        item.id === parseInt(itemId) ? { 
+          ...item, 
+          tags: updatedEntry.tags 
+        } : item
+      ));
+      
+    } catch (err) {
+      console.error("❌ Failed to remove tag:", err);
+    }
+  };
 
 
 
@@ -403,7 +403,7 @@ const removeTagFromItem = async (itemId, tagName, e) => {
             <div className="w-5 h-5 rounded-md bg-gradient-to-r from-blue-500 to-blue-400 flex items-center justify-center text-white text-xs font-semibold">
               ⌘
             </div>
-            <h1 className="text-sm font-semibold text-gray-800">ClipTray</h1>
+            <h1 className="text-sm font-semibold text-gray-800">ClipTray 6.0</h1>
 
 
           </div>
@@ -436,13 +436,7 @@ const removeTagFromItem = async (itemId, tagName, e) => {
             className="w-full h-6 pl-7 pr-2 border border-gray-300 rounded-md bg-gray-50 text-gray-800 text-xs outline-none focus:ring-1 focus:ring-blue-500"
             placeholder="Search clips"
             value={q}
-            onChange={(e) => {
-              if (e.target.checked) {
-                assignTagToItem(tagDropdown.itemId, tag.name); // Pass tag name directly
-              } else {
-                removeTagFromItem(tagDropdown.itemId, tag.name, e); // Pass tag name directly
-              }
-            }}          />
+          onChange={(e) => setQ(e.target.value)}          />
         </div>
       </div>
 

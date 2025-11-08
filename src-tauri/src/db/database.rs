@@ -6,10 +6,14 @@ use serde_json;
 
 pub async fn create_db_pool() -> Result<PgPool, Box<dyn std::error::Error>> {
     // Load .env file
-    dotenv::dotenv().ok();
+    // dotenv::dotenv().ok();
     
     // let database_url = env::var("DATABASE_URL")
-        let database_url = "postgresql://neondb_owner:npg_iu1eMYPHfAV8@ep-young-bush-affo5mc7-pooler.c-2.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
+    //  let database_url = "postgresql://neondb_owner:npg_iu1eMYPHfAV8@ep-young-bush-affo5mc7-pooler.c-2.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
+   
+     //Testing
+    
+    let database_url = "postgresql://neondb_owner:npg_bxlnSc2N3vZO@ep-super-sound-ahwuqcgc-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
     
     println!("🔗 Connecting to database...");
     
@@ -21,23 +25,61 @@ pub async fn create_db_pool() -> Result<PgPool, Box<dyn std::error::Error>> {
     // Simple connection test
     sqlx::query("SELECT 1")
         .execute(&pool)
-        .await?;
-    
-    println!("✅ Database connected successfully!");
-    
+        .await?;    
+    println!("Database connected successfully!");    
     // Create tables if they don't exist
-    create_tables(&pool).await?;
-    
+    create_tables(&pool).await?;    
     Ok(pool)
 }
 
 pub async fn create_tables(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
+    println!("📝 Creating database tables if they don't exist...");
+
+    println!("📝 Creating purge_cadence enum type if not exists...");
+    sqlx::query(
+        r#"
+        DO $$ 
+        BEGIN
+            CREATE TYPE purge_cadence AS ENUM (
+                'never',
+                'every_24_hours', 
+                'every_3_days',
+                'every_week',
+                'every_month'
+            );
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+        "#
+    )
+    .execute(pool)
+    .await?;
+
+    println!("📝 Creating Users table if not exists...");
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS users (
+            id BIGSERIAL PRIMARY KEY,
+            organization_id VARCHAR(255) NOT NULL,
+            firebase_uid TEXT UNIQUE NOT NULL,
+            email TEXT NOT NULL,
+            display_name TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            purge_cadence purge_cadence NOT NULL DEFAULT 'never',
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_login_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#
+    )
+    .execute(pool)
+    .await?;
+
     println!("📝 Creating clipboard table if not exists...");
-    
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS clipboard_entries (
             id BIGSERIAL PRIMARY KEY,
+            organization_id VARCHAR(255) NOT NULL,
             content TEXT NOT NULL,
             content_type VARCHAR(50) NOT NULL DEFAULT 'text',
             content_hash VARCHAR(64) UNIQUE NOT NULL,
@@ -52,37 +94,17 @@ pub async fn create_tables(pool: &PgPool) -> Result<(), Box<dyn std::error::Erro
     )
     .execute(pool)
     .await?;
-    
-    // Create index for better performance
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_clipboard_content_hash ON clipboard_entries(content_hash)"
-    )
-    .execute(pool)
-    .await?;
-    
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_clipboard_created_at ON clipboard_entries(created_at DESC)"
-    )
-    .execute(pool)
-    .await?;
-    
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_clipboard_source_app ON clipboard_entries(source_app)"
-    )
-    .execute(pool)
-    .await?;
 
+    println!("📝 Creating Tags table if not exists...");
     sqlx::query(
         r#"
-        CREATE TABLE IF NOT EXISTS users (
+        CREATE TABLE IF NOT EXISTS tags (
             id BIGSERIAL PRIMARY KEY,
-            firebase_uid TEXT UNIQUE NOT NULL,
-            email TEXT NOT NULL,
-            display_name TEXT,
-            photo_url TEXT,
+            organization_id VARCHAR(255) NOT NULL,
+            name VARCHAR(100) NOT NULL,
+            color VARCHAR(7) NOT NULL DEFAULT '#6B7280',
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            last_login_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         "#
     )
@@ -90,17 +112,33 @@ pub async fn create_tables(pool: &PgPool) -> Result<(), Box<dyn std::error::Erro
     .await?;
 
     // === Indexes ===
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid)"
-    )
-    .execute(pool)
-    .await?;
+    println!("📝 Creating indexes if not exist...");
+    
+    // Users indexes
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_users_organization_id ON users(organization_id)")
+        .execute(pool).await?;
 
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)"
-    )
-    .execute(pool)
-    .await?;
+    // Clipboard indexes
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_clipboard_content_hash ON clipboard_entries(content_hash)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_clipboard_created_at ON clipboard_entries(created_at DESC)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_clipboard_source_app ON clipboard_entries(source_app)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_clipboard_organization_id ON clipboard_entries(organization_id)")
+        .execute(pool).await?;
+
+    // Tags indexes
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_tags_organization_id ON tags(organization_id)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name)")
+        .execute(pool).await?;
+    sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_organization_name_unique ON tags(organization_id, LOWER(name))")
+        .execute(pool).await?;
     
     println!("✅ Database tables ready!");
     Ok(())
@@ -139,8 +177,8 @@ impl ClipboardRepository {
         let result = sqlx::query_as::<_, ClipboardEntry>(
             r#"
             INSERT INTO clipboard_entries 
-            (content, content_type, content_hash, source_app, source_window, timestamp, tags,user_id, organization_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            (content, content_type, content_hash, source_app, source_window, timestamp, tags, organization_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
             "#
         )
@@ -151,7 +189,7 @@ impl ClipboardRepository {
         .bind(entry.source_window)
         .bind(entry.timestamp)
         .bind(entry.tags)
-        .bind(entry.user_id) 
+        // REMOVED: .bind(entry.user_id) 
         .bind(entry.organization_id)     
         .fetch_one(pool)
         .await?;
@@ -374,11 +412,24 @@ impl ClipboardRepository {
             is_pinned: None,
         };
         
-        Self::update_entry(pool, clipboard_entry_id, update).await
+        let result = Self::update_entry(pool, clipboard_entry_id, update).await;
+         println!("✅ Success! Updated entry tags: {:?}", result);       
+        match &result {
+        Ok(updated) => {
+            let updated_tags = json_to_tags(&updated.tags);
+            println!("✅ Success! Updated entry tags: {:?}", updated_tags);
+        }
+        Err(e) => {
+            println!("❌ Update failed: {}", e);
+        }
+    }
+    
+    println!("=== REMOVE TAG DEBUG END ===");
+    result
     }
 
 
-    //Settings coommands
+    //Settings commands
     pub async fn delete_entries_older_than(pool: &PgPool, organization_id: &str, days: i32) -> Result<usize, sqlx::Error> {
         sqlx::query(
             "DELETE FROM clipboard_entries WHERE organization_id = $1 AND created_at < NOW() - ($2 || ' days')::INTERVAL"
@@ -411,5 +462,3 @@ impl ClipboardRepository {
         .map(|result| result.rows_affected() as usize)
     }
 }
-
-

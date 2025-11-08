@@ -715,14 +715,14 @@ pub async fn check_and_install_update_silently(app: &tauri::AppHandle) -> Result
 #[tauri::command]
 pub async fn check_for_updates(_app_handle: AppHandle) -> Result<UpdateCheckResult, String> {
     // Replace with your actual GitHub info
-    let updater = Updater::new("Shivanshudeveloper", "clipboard_updates", "0.1.7");
+    let updater = Updater::new("Shivanshudeveloper", "clipboard_updates", "0.2.4");
     let result = updater.check_for_updates().await;
     Ok(result)
 }
 
 #[tauri::command]
 pub async fn install_update(app_handle: AppHandle, download_url: String) -> Result<(), String> {
-    let updater = Updater::new("Shivanshudeveloper", "clipboard_updates", "0.1.7");
+    let updater = Updater::new("Shivanshudeveloper", "clipboard_updates", "0.2.4");
     updater.download_and_install(download_url, app_handle).await
 }
 
@@ -736,7 +736,7 @@ pub async fn download_update(
     let mut updater_guard = updater_state.lock().await; // Use .await instead of .unwrap()
     
     if updater_guard.is_none() {
-        *updater_guard = Some(Updater::new("Shivanshudeveloper", "clipboard_updates", "0.1.7"));
+        *updater_guard = Some(Updater::new("Shivanshudeveloper", "clipboard_updates", "0.2.4"));
     }
     
     if let Some(updater) = updater_guard.as_mut() {
@@ -771,5 +771,21 @@ pub async fn cancel_update(
     }
     *updater_guard = None;
     
+    Ok(())
+}
+
+
+
+#[tauri::command]
+pub async fn auto_update(app_handle: AppHandle) -> Result<bool, String> {
+    let mut updater = Updater::new("Shivanshudeveloper", "clipboard_updates", "0.2.4");
+    updater.auto_update(app_handle).await
+}
+
+
+#[tauri::command]
+pub async fn check_and_notify_updates(app_handle: AppHandle) -> Result<(), String> {
+    let updater = Updater::new("Shivanshudeveloper", "clipboard_updates", "0.2.4");
+    updater.check_and_notify(app_handle).await;
     Ok(())
 }
