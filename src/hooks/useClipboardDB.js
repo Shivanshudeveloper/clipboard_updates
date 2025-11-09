@@ -5,6 +5,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 export const useClipboardDB = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [initialLoad, setInitialLoad] = useState(true);
 
   // Get all clipboard entries
   const getClipboardEntries = useCallback(async (limit = 100) => {
@@ -14,6 +15,7 @@ export const useClipboardDB = () => {
       const data = await invoke('get_my_entries', { 
         limit: limit || undefined
       });
+      setInitialLoad(false);
       return data;
     } catch (err) {
       setError(err.message);
@@ -22,6 +24,9 @@ export const useClipboardDB = () => {
     } finally {
       setLoading(false);
     }
+  }, []);
+  const resetInitialLoad = useCallback(() => {
+    setInitialLoad(true);
   }, []);
 
   // Get recent entries (last N hours)
@@ -168,6 +173,7 @@ export const useClipboardDB = () => {
   return {
     loading,
     error,
+    initialLoad,
     getClipboardEntries,
     getRecentEntries,
     searchEntries,

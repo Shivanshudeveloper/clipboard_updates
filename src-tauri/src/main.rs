@@ -15,6 +15,7 @@ use tauri::{
 };
 use tauri_utils::config::WebviewUrl;
 use std::time::Duration;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use command::setup_silent_auto_updater;
 use command::{
@@ -50,6 +51,8 @@ use command::{
     login_user,
     logout_user,
     signup_user,
+    validate_session,
+    debug_session_state,
     
     // Application updates
     install_update,
@@ -64,7 +67,7 @@ use tauri::async_runtime::Mutex;
 use crate::updater::Updater;
 use crate::commands::clipboard::start_clipboard_monitoring;
 
-use crate::db::database::{create_db_pool, create_tables};
+use crate::db::database::{create_db_pool};
 
 // Application configuration
 const POP_W: f64 = 460.0;
@@ -140,7 +143,9 @@ async fn main() {
             login_user,
             logout_user,
             signup_user,
-            
+            validate_session,
+            debug_session_state,
+
             // Update operations
             install_update,
             download_update,
@@ -211,12 +216,6 @@ async fn initialize_database_async(app_handle: &tauri::AppHandle) -> Result<(), 
     
     let _ = app_handle.emit("database-status", 
         serde_json::json!({ "status": "creating_tables", "message": "Setting up database..." }));
-    
-    // Create tables
-    if let Err(e) = create_tables(&db_pool).await {
-        eprintln!("⚠️ Table creation had issues: {}", e);
-        // Don't fail completely - app can still work
-    }
     
     // Store pool in app state
     app_handle.manage(db_pool);
@@ -380,6 +379,7 @@ fn setup_tray_and_ui(app: &mut tauri::App) -> tauri::Result<()> {
 async fn check_database_status(state: State<'_, AppState>) -> Result<bool, String> {
     Ok(state.is_database_ready.load(Ordering::SeqCst))
 }
+
 
 /// ✅ Window positioning helper
 fn position_top_right_with_padding(

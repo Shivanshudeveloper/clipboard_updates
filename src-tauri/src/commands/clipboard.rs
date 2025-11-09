@@ -90,6 +90,11 @@ pub async fn start_clipboard_monitoring(
 
     loop {
         time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
+
+         if !crate::session::is_user_logged_in() {
+                // Skip clipboard processing if no user session
+                continue;
+            }
         
         // Get foreground window info before checking clipboard
         let window_info = get_foreground_window_info();

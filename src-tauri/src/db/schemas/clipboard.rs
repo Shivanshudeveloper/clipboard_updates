@@ -19,6 +19,80 @@ pub struct ClipboardEntry {
     pub organization_id: Option<String>,
 }
 
+// ADD THE TAG HANDLING METHODS RIGHT HERE - INSIDE THE ClipboardEntry IMPL BLOCK
+impl ClipboardEntry {
+    // Get tags as Vec<String> - properly parsed from JSON
+    pub fn get_tags(&self) -> Vec<String> {
+        match &self.tags {
+            Some(tags_json) if !tags_json.trim().is_empty() => {
+                // Clean the JSON string first
+                let cleaned_json = tags_json
+                    .trim()
+                    .replace("\\\"", "\"")  // Remove escape sequences
+                    .replace("\\\\", "\\");
+                
+                // Parse as JSON array
+                match serde_json::from_str::<Vec<String>>(&cleaned_json) {
+                    Ok(tags) => tags,
+                    Err(_) => {
+                        // If JSON parsing fails, try to extract tags manually
+                        if cleaned_json.starts_with('[') && cleaned_json.ends_with(']') {
+                            let inner = &cleaned_json[1..cleaned_json.len()-1];
+                            inner.split(',')
+                                .map(|s| s.trim().trim_matches('"').to_string())
+                                .filter(|s| !s.is_empty())
+                                .collect()
+                        } else {
+                            // Treat as single tag
+                            vec![cleaned_json.to_string()]
+                        }
+                    }
+                }
+            }
+            _ => Vec::new(), // Return empty vec for None or empty strings
+        }
+    }
+    
+    // Set tags from Vec<String> - properly serialize to JSON
+    pub fn set_tags(&mut self, tags: Vec<String>) {
+        if tags.is_empty() {
+            self.tags = None;
+        } else {
+            // Properly serialize to JSON array string
+            self.tags = Some(serde_json::to_string(&tags).unwrap_or_else(|_| {
+                // Fallback: manual JSON creation
+                let tags_json = tags
+                    .iter()
+                    .map(|tag| format!("\"{}\"", tag.replace('\"', "\\\"")))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("[{}]", tags_json)
+            }));
+        }
+    }
+    
+    // Add a single tag
+    pub fn add_tag(&mut self, tag: String) {
+        let mut current_tags = self.get_tags();
+        if !current_tags.contains(&tag) {
+            current_tags.push(tag);
+            self.set_tags(current_tags);
+        }
+    }
+    
+    // Remove a tag by name
+    pub fn remove_tag(&mut self, tag_name: &str) {
+        let mut current_tags = self.get_tags();
+        current_tags.retain(|t| t != tag_name);
+        self.set_tags(current_tags);
+    }
+    
+    // Check if entry has a specific tag
+    pub fn has_tag(&self, tag_name: &str) -> bool {
+        self.get_tags().iter().any(|t| t == tag_name)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewClipboardEntry {
     pub content: String,

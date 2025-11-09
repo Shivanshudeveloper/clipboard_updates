@@ -9,6 +9,8 @@ import {
   checkFirebaseSetup,
   signInWithEmail,
 } from "../libs/firebaseAuth";
+import { getAuth, onAuthStateChanged } from "firebase/auth";
+
 import { invoke } from "@tauri-apps/api/core";
 
 // Helper function to get organization ID for a user
@@ -62,50 +64,46 @@ export default function LoginPage() {
   const [debugInfo, setDebugInfo] = useState("");
   const navigate = useNavigate();
 
-  useEffect(() => {
-    
-    const checkAuth = async () => {
+
+useEffect(() => {
+  const auth = getAuth();
+  
+  const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    if (user) {
       try {
-        // Check if we have a redirect result (Google login callback)
-        const redirectResult = await handleRedirectResult();
-        if (redirectResult) {
-          
-          // Use the handlePostLogin function for Google auth
-          await handlePostLogin(redirectResult.user, navigate);
-          return;
-        }
-
-        // Check if user is already signed in AND has organizationId in localStorage
-        const currentUser = getCurrentUser();
-        const storedUser = localStorage.getItem('user');
+        console.log("🔄 Firebase user found, recreating backend session...");
         
-        if (currentUser && storedUser) {
-          const userData = JSON.parse(storedUser);
-          if (userData.organizationId) {
-            navigate("/home");
-            return;
-          } else {
-            // User is signed in but missing organizationId - reprocess
-            await handlePostLogin(currentUser, navigate);
-            return;
-          }
-        }
-
-        // Update debug info
-        const debugData = checkFirebaseSetup();
-        setDebugInfo(JSON.stringify(debugData, null, 2));
+        // Step 1: Get fresh Firebase token
+        const idToken = await user.getIdToken(true);
+        
+        // Step 2: Call login_user to recreate the Rust backend session
+        const userResponse = await invoke('login_user', {
+          firebaseToken: idToken,
+          displayName: user.displayName || "User",
+        });
+        
+        console.log("✅ Backend session recreated successfully");
+        
+        // Step 3: Now navigate to home
+        navigate("/home");
         
       } catch (error) {
-        console.error("❌ Auth check failed:", error);
-        setDebugInfo(JSON.stringify({
-          status: "auth_check_failed",
-          error: error.message
-        }, null, 2));
+        console.error("❌ Failed to recreate backend session:", error);
+        // If recreation fails, clear auth and go to login
+        await auth.signOut();
+        navigate("/login");
       }
-    };
+    } else {
+      console.log("🔴 No Firebase user, showing login page");
+      if (window.location.pathname !== '/login') {
+        navigate("/login");
+      }
+    }
+  });
 
-    checkAuth();
-  }, [navigate]);
+  return () => unsubscribe();
+}, [navigate]);
+
 
   const handleEmailLogin = async (e) => {
     e.preventDefault();

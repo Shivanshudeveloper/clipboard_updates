@@ -86,5 +86,3 @@ pub fn clear_current_user() {
 pub fn is_user_logged_in() -> bool {
     get_current_user_id().is_some()
 }
-
-// Helper function to get full session info for debugging

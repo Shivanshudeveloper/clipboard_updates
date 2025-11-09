@@ -5,20 +5,26 @@ import { invoke } from '@tauri-apps/api/core';
 export function useTagsDB() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [initialLoad, setInitialLoad] = useState(true);
 
   const getTags = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       const tags = await invoke('get_organization_tags');
+      setInitialLoad(false);
       return tags;
     } catch (err) {
       setError(err.message);
+      setInitialLoad(false);
       console.error('Error fetching tags:', err);
       return [];
     } finally {
       setLoading(false);
     }
+  }, []);
+  const resetInitialLoad = useCallback(() => {
+    setInitialLoad(true);
   }, []);
 
   const createTag = useCallback(async (tagData) => {
@@ -57,6 +63,8 @@ export function useTagsDB() {
   return {
     getTags,
     createTag,
+    initialLoad,
+    resetInitialLoad,
     deleteTag,
     loading,
     error,

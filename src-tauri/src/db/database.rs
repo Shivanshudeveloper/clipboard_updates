@@ -144,24 +144,51 @@ pub async fn create_tables(pool: &PgPool) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
-// In your database.rs file, update the helper functions
 pub fn tags_to_json(tag_names: &[String]) -> Option<String> {
     if tag_names.is_empty() {
         None
     } else {
+        // Use the same serialization logic as the ClipboardEntry model
         match serde_json::to_string(tag_names) {
             Ok(json) => Some(json),
-            Err(_) => None,
+            Err(_) => {
+                // Fallback: manual JSON creation (same as in set_tags)
+                let tags_json = tag_names
+                    .iter()
+                    .map(|tag| format!("\"{}\"", tag.replace('\"', "\\\"")))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                Some(format!("[{}]", tags_json))
+            }
         }
     }
 }
 
 pub fn json_to_tags(tags_json: &Option<String>) -> Vec<String> {
     match tags_json {
-        Some(json) => {
-            serde_json::from_str(json).unwrap_or_else(|_| Vec::new())
+        Some(json) if !json.trim().is_empty() => {
+            // Use the same parsing logic as the ClipboardEntry model
+            let cleaned_json = json
+                .trim()
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\");
+            
+            match serde_json::from_str::<Vec<String>>(&cleaned_json) {
+                Ok(tags) => tags,
+                Err(_) => {
+                    if cleaned_json.starts_with('[') && cleaned_json.ends_with(']') {
+                        let inner = &cleaned_json[1..cleaned_json.len()-1];
+                        inner.split(',')
+                            .map(|s| s.trim().trim_matches('"').to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    } else {
+                        vec![cleaned_json.to_string()]
+                    }
+                }
+            }
         }
-        None => Vec::new(),
+        _ => Vec::new(),
     }
 }
 
@@ -170,6 +197,7 @@ pub fn json_to_tags(tags_json: &Option<String>) -> Vec<String> {
 pub struct ClipboardRepository;
 
 impl ClipboardRepository {
+    
     pub async fn save_entry(
         pool: &PgPool, 
         entry: NewClipboardEntry
@@ -361,72 +389,7 @@ impl ClipboardRepository {
         Ok(result.is_some())
     }
 
-     pub async fn assign_tag(
-        pool: &PgPool, 
-        clipboard_entry_id: i64, 
-        tag_name: &str // Change from tag_id to tag_name
-    ) -> Result<ClipboardEntry, Box<dyn std::error::Error>> {
-        // First get the current entry
-        let current_entry = Self::get_by_id(pool, clipboard_entry_id).await?
-            .ok_or("Clipboard entry not found")?;
-        
-        // Parse current tags (now they are names, not IDs)
-        let mut current_tags = json_to_tags(&current_entry.tags);
-        
-        // Add the new tag name if not already present
-        if !current_tags.contains(&tag_name.to_string()) {
-            current_tags.push(tag_name.to_string());
-        }
-        
-        // Convert back to JSON
-        let new_tags_json = tags_to_json(&current_tags);
-        
-        // Update the entry
-        let update = UpdateClipboardEntry {
-            tags: new_tags_json,
-            is_pinned: None,
-        };
-        
-        Self::update_entry(pool, clipboard_entry_id, update).await
-    }
 
-    pub async fn remove_tag(
-        pool: &PgPool, 
-        clipboard_entry_id: i64, 
-        tag_name: &str // Change from tag_id to tag_name
-    ) -> Result<ClipboardEntry, Box<dyn std::error::Error>> {
-        // First get the current entry
-        let current_entry = Self::get_by_id(pool, clipboard_entry_id).await?
-            .ok_or("Clipboard entry not found")?;
-        
-        // Parse current tags and remove the specified tag name
-        let mut current_tags = json_to_tags(&current_entry.tags);
-        current_tags.retain(|name| name != tag_name);
-        
-        // Convert back to JSON
-        let new_tags_json = tags_to_json(&current_tags);
-        
-        // Update the entry
-        let update = UpdateClipboardEntry {
-            tags: new_tags_json,
-            is_pinned: None,
-        };
-        
-        let result = Self::update_entry(pool, clipboard_entry_id, update).await;
-         println!("✅ Success! Updated entry tags: {:?}", result);       
-        match &result {
-        Ok(updated) => {
-            let updated_tags = json_to_tags(&updated.tags);
-            println!("✅ Success! Updated entry tags: {:?}", updated_tags);
-        }
-        Err(e) => {
-            println!("❌ Update failed: {}", e);
-        }
-    }
-    
-    println!("=== REMOVE TAG DEBUG END ===");
-    result
-    }
 
 
     //Settings commands
@@ -461,4 +424,130 @@ impl ClipboardRepository {
         .await
         .map(|result| result.rows_affected() as usize)
     }
+
+    pub async fn assign_tag(
+    pool: &PgPool, 
+    clipboard_entry_id: i64, 
+    tag_name: &str
+) -> Result<ClipboardEntry, String> { // Change to String error type
+    println!("=== ASSIGN TAG DEBUG ===");
+    println!("🟢 Assigning tag '{}' to entry {}", tag_name, clipboard_entry_id);
+    
+    // First get the current entry
+    let current_entry = Self::get_by_id(pool, clipboard_entry_id).await
+        .map_err(|e| format!("Database error: {}", e))?
+        .ok_or("Clipboard entry not found".to_string())?;
+    
+    println!("📋 Current entry tags: {:?}", current_entry.tags);
+    
+    // Parse current tags
+    let mut current_tags = json_to_tags(&current_entry.tags);
+    println!("📋 Parsed current tags: {:?}", current_tags);
+    
+    // Add the new tag name if not already present
+    if !current_tags.contains(&tag_name.to_string()) {
+        current_tags.push(tag_name.to_string());
+        println!("✅ Added tag '{}'", tag_name);
+    } else {
+        println!("ℹ️ Tag '{}' already exists", tag_name);
+    }
+    
+    println!("📋 New tags: {:?}", current_tags);
+    
+    // Convert back to JSON
+    let new_tags_json = tags_to_json(&current_tags);
+    println!("📋 New tags JSON: {:?}", new_tags_json);
+    
+    // Update the entry
+    let update = UpdateClipboardEntry {
+        tags: new_tags_json,
+        is_pinned: None,
+    };
+    
+    let result = Self::update_entry(pool, clipboard_entry_id, update).await
+        .map_err(|e| format!("Update failed: {}", e))?;
+    
+    println!("✅ Success! Updated entry tags: {:?}", json_to_tags(&result.tags));
+    println!("=== ASSIGN TAG DEBUG END ===");
+    
+    Ok(result)
+}
+
+pub async fn remove_tag(
+    pool: &PgPool, 
+    clipboard_entry_id: i64, 
+    tag_name: &str
+) -> Result<ClipboardEntry, String> {
+    println!("=== REMOVE TAG DEBUG ===");
+    println!("🔴 Removing tag '{}' from entry {}", tag_name, clipboard_entry_id);
+    
+    // First get the current entry WITH ORGANIZATION CHECK
+    let organization_id = crate::session::get_current_organization_id()
+        .ok_or("User not logged in".to_string())?;
+    
+    let current_entry = sqlx::query_as::<_, ClipboardEntry>(
+        "SELECT * FROM clipboard_entries WHERE id = $1 AND organization_id = $2"
+    )
+    .bind(clipboard_entry_id)
+    .bind(&organization_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Database error: {}", e))?
+    .ok_or("Clipboard entry not found".to_string())?;
+    
+    println!("📋 Current entry tags: {:?}", current_entry.tags);
+    
+    // Parse current tags and remove the specified tag name
+    let mut current_tags = json_to_tags(&current_entry.tags);
+    println!("📋 Parsed current tags: {:?}", current_tags);
+    
+    let before_count = current_tags.len();
+    current_tags.retain(|name| name != tag_name);
+    let after_count = current_tags.len();
+    
+    println!("📋 Tags before: {}, after: {}", before_count, after_count);
+    println!("📋 New tags: {:?}", current_tags);
+    
+    // Convert back to JSON
+    let new_tags_json = tags_to_json(&current_tags);
+    println!("📋 New tags JSON: {:?}", new_tags_json);
+    
+    // Update the entry WITH ORGANIZATION CHECK
+    let result = sqlx::query_as::<_, ClipboardEntry>(
+        r#"
+        UPDATE clipboard_entries 
+        SET tags = $1
+        WHERE id = $2 AND organization_id = $3
+        RETURNING *
+        "#
+    )
+    .bind(&new_tags_json)
+    .bind(clipboard_entry_id)
+    .bind(&organization_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Update failed: {}", e))?;
+    
+    println!("✅ Database update successful!");
+    println!("✅ Updated entry tags from query: {:?}", result.tags);
+    
+    // Verify with the same organization check
+    let verified_entry = sqlx::query_as::<_, ClipboardEntry>(
+        "SELECT * FROM clipboard_entries WHERE id = $1 AND organization_id = $2"
+    )
+    .bind(clipboard_entry_id)
+    .bind(&organization_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Verification failed: {}", e))?
+    .ok_or("Could not verify update - entry not found".to_string())?;
+    
+    let verified_tags = json_to_tags(&verified_entry.tags);
+    println!("✅ Verified tags after update: {:?}", verified_tags);
+    println!("✅ Raw verified tags: {:?}", verified_entry.tags);
+    
+    println!("=== REMOVE TAG DEBUG END ===");
+    Ok(result)
+}
+
 }

@@ -8,42 +8,160 @@ import { INITIAL_TAGS } from "../mock/data";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentUser, signOutUser } from "../libs/firebaseAuth";
 import { useNavigate,Link } from "react-router-dom";
+import { getAuth, onAuthStateChanged } from "firebase/auth";
+
+import { SkeletonClipItem, SkeletonHeader, SkeletonTags } from "../components/home/SkeletonLoader";
+
 
 function isTauri() {
   return "__TAURI__" in window;
 }
 
 export default function ClipTray() {
-  const {
+const {
     getClipboardEntries,
     updateEntryContent,
     deleteEntry,
-    startPolling
+    startPolling,
+    initialLoad
   } = useClipboardDB();
 
-  // Add tags hook
   const {
     getTags,
     createTag,
     deleteTag: deleteTagBackend,
     loading: tagsLoading,
-    error: tagsError
+    error: tagsError,
+    initialLoad: tagsInitialLoad
   } = useTagsDB();
 
   const [localItems, setLocalItems] = useState([]);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [sessionValid, setSessionValid] = useState(false);
+  const [sessionChecking, setSessionChecking] = useState(true);
+  
   const navigate = useNavigate();
 
-  // ✅ Auto-fetch with polling - no manual refresh needed
+useEffect(() => {
+  const checkAndRestoreSession = async () => {
+    try {
+      console.log("🔍 Checking session state...");
+      
+      // Check current session state
+      const sessionState = await invoke('debug_session_state');
+      console.log("🦀 Current session state:", sessionState);
+      
+      if (sessionState.is_logged_in) {
+        console.log("✅ Session is valid, proceeding...");
+        setSessionValid(true);
+        setSessionChecking(false);
+        return;
+      }
+      
+      console.log("🔄 No valid session, checking Firebase...");
+      
+      // If no session, check if we have a Firebase user
+      const auth = getAuth();
+      const firebaseUser = auth.currentUser;
+      
+      if (firebaseUser) {
+        console.log("🔥 Firebase user found:", firebaseUser.email);
+        
+        // First, check if database is ready
+        console.log("🔄 Checking if database is ready...");
+        const dbReady = await invoke('check_database_status');
+        
+        if (!dbReady) {
+          console.log("⏳ Database not ready yet, waiting...");
+          // Wait a bit and try again
+          setTimeout(() => {
+            checkAndRestoreSession();
+          }, 1000);
+          return;
+        }
+        
+        console.log("✅ Database is ready, restoring Rust session...");
+        
+        try {
+          // Restore the Rust session
+          const idToken = await firebaseUser.getIdToken(true);
+          const userResponse = await invoke('login_user', {
+            firebaseToken: idToken,
+            displayName: firebaseUser.displayName || "User",
+          });
+          
+          console.log("✅ Rust session restored successfully");
+          setSessionValid(true);
+          
+        } catch (restoreError) {
+          console.error("❌ Rust session restoration failed:", restoreError);
+          
+          // Try alternative approach - use validate_session if available
+          try {
+            console.log("🔄 Trying alternative session restoration...");
+            const sessionValid = await invoke('validate_session', {
+              firebaseToken: idToken,
+            });
+            
+            if (sessionValid) {
+              console.log("✅ Session validated via alternative method");
+              setSessionValid(true);
+            } else {
+              throw new Error("Alternative method failed");
+            }
+          } catch (altError) {
+            console.error("❌ Alternative restoration failed:", altError);
+            // Last resort: continue with Firebase user only
+            console.log("🟡 Continuing with Firebase user only");
+            setSessionValid(true);
+          }
+        }
+      } else {
+        console.log("🔴 No Firebase user, redirecting to login");
+        navigate("/login");
+        return;
+      }
+      
+    } catch (error) {
+      console.error("❌ Session restoration failed:", error);
+      // Check if it's a database not ready error
+      if (error.toString().includes('state not managed') || error.toString().includes('pool')) {
+        console.log("🔄 Database not ready, retrying in 2 seconds...");
+        setTimeout(() => {
+          checkAndRestoreSession();
+        }, 1000);
+      } else {
+        navigate("/login");
+      }
+    } finally {
+      setSessionChecking(false);
+    }
+  };
+
+  // Start session restoration with a delay to allow backend initialization
+  setTimeout(() => {
+    checkAndRestoreSession();
+  }, 1000);
+}, [navigate]);
+
+  // ✅ Auto-fetch with polling - but only if session is valid
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauri() || !sessionValid) return;
     
     const loadEntries = async () => {
       try {
+        console.log("📥 Loading clipboard entries...");
         const data = await getClipboardEntries(100);
-        if (Array.isArray(data)) setLocalItems(data);
+        if (Array.isArray(data)) {
+          console.log(`✅ Loaded ${data.length} entries`);
+          setLocalItems(data);
+        }
       } catch (err) {
         console.error("Error loading entries:", err);
+        // If loading fails due to auth, redirect to login
+        if (err.toString().includes('not logged in') || err.toString().includes('User not logged in')) {
+          navigate("/login");
+        }
       }
     };
 
@@ -58,7 +176,7 @@ export default function ClipTray() {
     }, 3000);
 
     return cleanup; // Cleanup on unmount
-  }, [getClipboardEntries, startPolling]);
+  }, [getClipboardEntries, startPolling, sessionValid, navigate]);
 
   const [q, setQ] = useState("");
   const [tags, setTags] = useState([]); // Start with empty array, fetch from backend
@@ -70,12 +188,15 @@ export default function ClipTray() {
   const [pinnedItems, setPinnedItems] = useState(new Set());
   const [itemTags, setItemTags] = useState({});
 
-  // ✅ Fetch tags from backend on component mount
   useEffect(() => {
+    if (!sessionValid) return;
+
     const loadTags = async () => {
       try {
+        console.log("🏷️ Loading tags...");
         const backendTags = await getTags();
         if (Array.isArray(backendTags)) {
+          console.log(`✅ Loaded ${backendTags.length} tags`);
           setTags(backendTags);
         }
       } catch (err) {
@@ -86,7 +207,7 @@ export default function ClipTray() {
     };
 
     loadTags();
-  }, [getTags]);
+  }, [getTags, sessionValid]);
 
   // ✅ Update pinned items from database data
   useEffect(() => {
@@ -100,29 +221,23 @@ export default function ClipTray() {
   }, [localItems]);
 
   // ✅ Adapt DB data to your UI
+// In your useMemo that processes items, update the tags parsing:
 const items = useMemo(() => {
   return localItems.map((item, index) => {
     
-    // Parse tags from database
+    // Parse tags from database - handle both string and array formats
     let tagsArray = [];
     
     if (item.tags) {
       if (typeof item.tags === 'string') {
         try {
-          // Handle JSON string like "[\"Work\", \"Important\"]"
-          let cleanTags = item.tags.trim();
-          
-          // Remove extra backslashes if they exist
-          cleanTags = cleanTags.replace(/\\/g, '');
-          
-          // Parse the JSON
+          let cleanTags = item.tags.trim().replace(/\\/g, '');
           tagsArray = JSON.parse(cleanTags);
         } catch (e) {
           console.error("Error parsing tags JSON:", e, "Raw tags:", item.tags);
           tagsArray = [];
         }
       } else if (Array.isArray(item.tags)) {
-        // If it's already an array, use it directly
         tagsArray = item.tags;
       }
     }
@@ -135,36 +250,32 @@ const items = useMemo(() => {
       source_app: item.source_app || "Unknown",
       source_window: item.source_window || "",
       pinned: item.is_pinned || pinnedItems.has(item.id),
-      tags: tagsArray
+      tags: tagsArray  // This should now be a proper array
     };
     
     return processedItem;
   });
 }, [localItems, pinnedItems]);
 
- 
-
-// Update the filtered items logic to work with tag names
-const filtered = useMemo(() => {
-  const s = q.trim().toLowerCase();
-  let filteredItems = items;
-  
-  // Search filter
-  if (s) {
-    filteredItems = filteredItems.filter(x => x.content.toLowerCase().includes(s));
-  }
-  
-  // Tag filter - now using tag names
-  if (activeTag !== "all") {
-    filteredItems = filteredItems.filter(item => 
-      item.tags && item.tags.includes(activeTag) // Check if item has this tag name
-    );
-  }
-  
- 
-  
-  return filteredItems;
-}, [q, items, activeTag]);
+  // Update the filtered items logic to work with tag names
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    let filteredItems = items;
+    
+    // Search filter
+    if (s) {
+      filteredItems = filteredItems.filter(x => x.content.toLowerCase().includes(s));
+    }
+    
+    // Tag filter - now using tag names
+    if (activeTag !== "all") {
+      filteredItems = filteredItems.filter(item => 
+        item.tags && item.tags.includes(activeTag) // Check if item has this tag name
+      );
+    }
+    
+    return filteredItems;
+  }, [q, items, activeTag]);
 
   const pinned = filtered.filter(x => x.pinned);
   const recent = filtered.filter(x => !x.pinned);
@@ -199,13 +310,21 @@ const filtered = useMemo(() => {
   const handleLogout = async () => {
     try {
       setIsLoggingOut(true);
+      
+      // Clear Firebase auth
       await signOutUser();
+      
+      // Clear Rust backend session
       const result = await invoke('logout_user');
-    console.log(result);
-    
-    localStorage.removeItem('user');
-    sessionStorage.clear();
+      console.log(result);
+      
+      // Clear all local storage
+      localStorage.removeItem('user');
+      sessionStorage.clear();
+      
+      // Navigate to login
       navigate("/login");
+      
     } catch (error) {
       console.error("Logout failed:", error);
       alert("Logout failed. Please try again.");
@@ -291,60 +410,142 @@ const filtered = useMemo(() => {
     }
   };
 
+
+const removeTagFromItem = async (itemId, tagName, e) => {
+  if (e) e.stopPropagation();
+  
+  try {
+    console.log("🔴 REMOVING tag:", tagName, "from item:", itemId);
+    
+    // Optimistically update the UI first for immediate feedback
+    setLocalItems(prev => prev.map(item => {
+      if (item.id === parseInt(itemId)) {
+        const currentTags = Array.isArray(item.tags) ? item.tags : [];
+        const newTags = currentTags.filter(t => t !== tagName);
+        console.log("🎯 Optimistic update - removing tag:", tagName, "New tags:", newTags);
+        return { ...item, tags: newTags };
+      }
+      return item;
+    }));
+
+    // Close any open dropdowns immediately
+    setTagDropdown(null);
+    setMenu(null);
+    
+    // Then make the API call
+    const updatedEntry = await invoke("remove_tag_from_entry", {
+      clipboardEntryId: parseInt(itemId),
+      tagName: tagName
+    });
+    
+    console.log("✅ Backend response:", updatedEntry);
+    
+    // Parse the actual tags from backend response
+    let parsedTags = [];
+    if (updatedEntry.tags) {
+      if (typeof updatedEntry.tags === 'string') {
+        try {
+          let cleanTags = updatedEntry.tags.trim().replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+          if (cleanTags.startsWith('[') && cleanTags.endsWith(']')) {
+            parsedTags = JSON.parse(cleanTags);
+          } else {
+            parsedTags = [cleanTags];
+          }
+        } catch (e) {
+          console.error("Error parsing tags:", e);
+          parsedTags = [];
+        }
+      } else if (Array.isArray(updatedEntry.tags)) {
+        parsedTags = updatedEntry.tags;
+      }
+    }
+    
+    console.log("✅ Parsed tags from backend:", parsedTags);
+    
+    // Final sync with backend data
+    setLocalItems(prev => prev.map(item => {
+      if (item.id === parseInt(itemId)) {
+        const finalItem = { ...item, tags: parsedTags };
+        console.log("✅ Final item state:", finalItem);
+        return finalItem;
+      }
+      return item;
+    }));
+    
+  } catch (err) {
+    console.error("❌ Failed to remove tag:", err);
+    // Revert optimistic update on error by refreshing data
+    refreshClipboardData();
+  }
+};
+
+// ✅ Fixed assignTagToItem function
 const assignTagToItem = async (itemId, tagId) => {
   try {
-    // First, find the tag name from the tag ID
     const tag = tags.find(t => t.id === tagId);
     if (!tag) {
       console.error("Tag not found with ID:", tagId);
       return;
     }
 
+    console.log("🟢 ASSIGNING tag:", tag.name, "to item:", itemId);
+
+    // Optimistically update the UI first
+    setLocalItems(prev => prev.map(item => {
+      if (item.id === parseInt(itemId)) {
+        const currentTags = Array.isArray(item.tags) ? item.tags : [];
+        const newTags = [...currentTags, tag.name];
+        console.log("🎯 Optimistic update - adding tag:", tag.name, "New tags:", newTags);
+        return { ...item, tags: newTags };
+      }
+      return item;
+    }));
+
+    // Close dropdown immediately
+    setTagDropdown(null);
+
     const updatedEntry = await invoke("assign_tag_to_entry", {
       clipboardEntryId: parseInt(itemId),
-      tagName: tag.name // Pass the tag name, not the ID
+      tagName: tag.name
     });
     
+    console.log("✅ Assign response:", updatedEntry);
+    
+    // Parse tags from backend response
+    let parsedTags = [];
+    if (updatedEntry.tags) {
+      if (typeof updatedEntry.tags === 'string') {
+        try {
+          let cleanTags = updatedEntry.tags.trim().replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+          if (cleanTags.startsWith('[') && cleanTags.endsWith(']')) {
+            parsedTags = JSON.parse(cleanTags);
+          } else {
+            parsedTags = [cleanTags];
+          }
+        } catch (e) {
+          console.error("Error parsing tags in assign:", e);
+          parsedTags = [];
+        }
+      } else if (Array.isArray(updatedEntry.tags)) {
+        parsedTags = updatedEntry.tags;
+      }
+    }
+    
+    console.log("✅ Parsed tags from backend:", parsedTags);
+    
+    // Final sync with backend
     setLocalItems(prev => prev.map(item => 
       item.id === parseInt(itemId) ? { 
         ...item, 
-        tags: updatedEntry.tags 
+        tags: parsedTags 
       } : item
     ));
     
-    
   } catch (err) {
-    console.error("Failed to assign tag:", err);
-    alert("Failed to assign tag: " + err);
+    console.error("❌ Failed to assign tag:", err);
+    refreshClipboardData();
   }
 };
-
-const removeTagFromItem = async (itemId, tagName, e) => {
-    if (e) e.stopPropagation();
-    
-    try {
-      console.log("🔴 REMOVING tag:", tagName, "from item:", itemId);
-      
-      const updatedEntry = await invoke("remove_tag_from_entry", {
-        clipboardEntryId: parseInt(itemId),
-        tagName: tagName
-      });
-      
-      console.log("✅ Remove response:", updatedEntry);
-      
-      setLocalItems(prev => prev.map(item => 
-        item.id === parseInt(itemId) ? { 
-          ...item, 
-          tags: updatedEntry.tags 
-        } : item
-      ));
-      
-    } catch (err) {
-      console.error("❌ Failed to remove tag:", err);
-    }
-  };
-
-
 
   // ✅ Updated deleteTag to use backend
   const handleDeleteTag = async (tagId) => {
@@ -394,6 +595,60 @@ const removeTagFromItem = async (itemId, tagName, e) => {
     });
   };
 
+  if (sessionChecking) {
+    return (
+      <div className="flex flex-col bg-white relative" style={{ height: '565px' }}>
+        <div className="flex items-center justify-center h-full">
+          <div className="text-center">
+            <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+            <p className="text-sm text-gray-600">Loading Page.....</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  
+  if (initialLoad || tagsInitialLoad) {
+    return (
+      <div className="flex flex-col bg-white relative" style={{ height: '565px' }}>
+        <SkeletonHeader />
+        <SkeletonTags />
+        
+        {/* Pinned Section Skeleton */}
+        <div className="flex flex-col flex-1 mb-1">
+          <div className="flex justify-between items-center p-2 text-xs font-semibold text-gray-500 uppercase tracking-wider flex-shrink-0">
+            <span>Pinned</span>
+            <div className="w-6 h-4 bg-gray-200 rounded-full"></div>
+          </div>
+          <div className="flex-1 overflow-y-auto min-h-0 p-2 space-y-1.5">
+            {[...Array(1)].map((_, i) => (
+              <SkeletonClipItem key={i} />
+            ))}
+          </div>
+        </div>
+
+        {/* Recent Section Skeleton */}
+        <div className="flex flex-col flex-1">
+          <div className="flex justify-between items-center p-2 text-xs font-semibold text-gray-500 uppercase tracking-wider flex-shrink-0">
+            <span>Recent</span>
+            <div className="w-6 h-4 bg-gray-200 rounded-full"></div>
+          </div>
+          <div className="flex-1 overflow-y-auto min-h-0 p-2 space-y-1.5">
+            {[...Array(2)].map((_, i) => (
+              <SkeletonClipItem key={i} />
+            ))}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="p-2 text-center text-xs text-gray-400 bg-white border-t border-gray-200 flex-shrink-0">
+          Create with ❤️ by MakerStudio
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col bg-white relative" style={{ height: '565px'}}>
       {/* Header - With logout button */}
@@ -403,30 +658,28 @@ const removeTagFromItem = async (itemId, tagName, e) => {
             <div className="w-5 h-5 rounded-md bg-gradient-to-r from-blue-500 to-blue-400 flex items-center justify-center text-white text-xs font-semibold">
               ⌘
             </div>
-            <h1 className="text-sm font-semibold text-gray-800">ClipTray 6.0</h1>
-
-
+            <h1 className="text-sm font-semibold text-gray-800">ClipTray</h1>
           </div>
           <div className="flex gap-2 ">
             <div className="mt-1">
               <Link to="/settings">
-          <Settings size={18} className="text-gray-600" />
-          </Link>
-          </div>
-          {/* Logout Button */}
-          <button
-            onClick={handleLogout}
-            disabled={isLoggingOut}
-            className="flex items-center gap-1 px-2 py-1 text-xs text-gray-600 bg-white border border-gray-300 rounded-md hover:bg-gray-50 hover:border-gray-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            title="Logout"
-          >
-            {isLoggingOut ? (
-              <div className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <LogOut size={12} />
-            )}
-            Logout
-          </button>
+                <Settings size={18} className="text-gray-600" />
+              </Link>
+            </div>
+            {/* Logout Button */}
+            <button
+              onClick={handleLogout}
+              disabled={isLoggingOut}
+              className="flex items-center gap-1 px-2 py-1 text-xs text-gray-600 bg-white border border-gray-300 rounded-md hover:bg-gray-50 hover:border-gray-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              title="Logout"
+            >
+              {isLoggingOut ? (
+                <div className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <LogOut size={12} />
+              )}
+              Logout
+            </button>
           </div>
         </div>
         
@@ -436,50 +689,51 @@ const removeTagFromItem = async (itemId, tagName, e) => {
             className="w-full h-6 pl-7 pr-2 border border-gray-300 rounded-md bg-gray-50 text-gray-800 text-xs outline-none focus:ring-1 focus:ring-blue-500"
             placeholder="Search clips"
             value={q}
-          onChange={(e) => setQ(e.target.value)}          />
+            onChange={(e) => setQ(e.target.value)}
+          />
         </div>
       </div>
 
       {/* Tags */}
-<div className="bg-white px-2 pt-0.5 flex-shrink-0">
-  <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
-    <button
-      className={`flex items-center gap-0.5 py-0.5 px-1.5 text-xs font-medium rounded-full border transition-all whitespace-nowrap ${
-        activeTag === "all" 
-          ? "bg-blue-500 text-white border-transparent" 
-          : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
-      }`}
-      onClick={() => setActiveTag("all")}
-    >
-      All
-    </button>
-    
-    {tagsLoading ? (
-      <div className="text-xs text-gray-500">Loading tags...</div>
-    ) : (
-      tags.map(tag => (
-        <button
-          key={tag.id}
-          className={`flex items-center gap-0.5 py-0.5 px-1.5 text-xs font-medium rounded-full border transition-all whitespace-nowrap ${
-            activeTag === tag.name // Use tag.name instead of tag.id.toString()
-              ? "text-white border-transparent" 
-              : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
-          }`}
-          style={{
-            backgroundColor: activeTag === tag.name ? tag.color : 'transparent',
-            borderColor: activeTag === tag.name ? tag.color : ''
-          }}
-          onClick={() => setActiveTag(tag.name)} // Set to tag name
-        >
-          {tag.name}
-        </button>
-      ))
-    )}
-  </div>
-  {tagsError && (
-    <div className="text-xs text-red-500 mt-1">{tagsError}</div>
-  )}
-</div>
+      <div className="bg-white px-2 pt-0.5 flex-shrink-0">
+        <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
+          <button
+            className={`flex items-center gap-0.5 py-0.5 px-1.5 text-xs font-medium rounded-full border transition-all whitespace-nowrap ${
+              activeTag === "all" 
+                ? "bg-blue-500 text-white border-transparent" 
+                : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+            }`}
+            onClick={() => setActiveTag("all")}
+          >
+            All
+          </button>
+          
+          {tagsLoading ? (
+            <div className="text-xs text-gray-500">Loading tags...</div>
+          ) : (
+            tags.map(tag => (
+              <button
+                key={tag.id}
+                className={`flex items-center gap-0.5 py-0.5 px-1.5 text-xs font-medium rounded-full border transition-all whitespace-nowrap ${
+                  activeTag === tag.name // Use tag.name instead of tag.id.toString()
+                    ? "text-white border-transparent" 
+                    : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+                }`}
+                style={{
+                  backgroundColor: activeTag === tag.name ? tag.color : 'transparent',
+                  borderColor: activeTag === tag.name ? tag.color : ''
+                }}
+                onClick={() => setActiveTag(tag.name)} // Set to tag name
+              >
+                {tag.name}
+              </button>
+            ))
+          )}
+        </div>
+        {tagsError && (
+          <div className="text-xs text-red-500 mt-1">{tagsError}</div>
+        )}
+      </div>
 
       {/* Content Area */}
       <div className="flex-1 overflow-hidden flex flex-col p-2">
@@ -609,27 +863,24 @@ const removeTagFromItem = async (itemId, tagName, e) => {
             </button>
           </div>
 
-<div className="space-y-0.5 max-h-32 overflow-y-auto">
+         <div className="space-y-0.5 max-h-32 overflow-y-auto">
   {tags.map(tag => {
     const currentItem = items.find(item => item.id === tagDropdown.itemId);
-    const hasTag = currentItem?.tags.includes(tag.name); // Check by name
+    const hasTag = currentItem?.tags?.includes(tag.name);
     
     return (  
       <label key={tag.id} className="flex items-center gap-1.5 p-1 hover:bg-gray-50 rounded-md cursor-pointer">
         <div className="relative inline-flex items-center">
           <input
             type="checkbox"
-            checked={hasTag}
+            checked={!!hasTag}
             onChange={(e) => {
-              console.log("🔄 Checkbox changed:", {
-                checked: e.target.checked,
-                tagName: tag.name,
-                itemId: tagDropdown.itemId
-              });
-              if (e.target.checked) {
-                assignTagToItem(tagDropdown.itemId, tag.id); 
-              } else {
-                removeTagFromItem(tagDropdown.itemId, tag.name, e); 
+              const shouldAssign = e.target.checked;
+              
+              if (shouldAssign && !hasTag) {
+                assignTagToItem(tagDropdown.itemId, tag.id);
+              } else if (!shouldAssign && hasTag) {
+                removeTagFromItem(tagDropdown.itemId, tag.name);
               }
             }}
             className="absolute opacity-0 w-4 h-4 cursor-pointer z-10"
@@ -644,7 +895,6 @@ const removeTagFromItem = async (itemId, tagName, e) => {
             )}
           </div>
         </div>
-      
         <span className="text-xs text-gray-700 flex-1">{tag.name}</span>
       </label>
     );
@@ -772,8 +1022,6 @@ function ClipItem({ item, tags, onCopy, onMenuOpen, onTagClick, onRemoveTag, for
       {item.tags && item.tags.length > 0 ? (
         <div className="flex flex-wrap gap-0.5 mb-0.5">
           {item.tags.map((tagName, index) => {
-
-
             // Find the tag to get its color
             const tag = tags.find(t => t.name === tagName);
             const tagColor = tag?.color || '#cccccc';

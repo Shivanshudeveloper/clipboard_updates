@@ -3,20 +3,21 @@ use crate::db::schemas::ClipboardEntry;
 use crate::auth::verify_firebase_token;
 use crate::db::database::create_db_pool;
 use crate::db::users_repository::UsersRepository;
-use crate::db::schemas::users::{NewUser, UserResponse,PurgeCadence};
-// use crate::db::schemas::users::PurgeCadence;
+use crate::db::schemas::users::{NewUser, UserResponse, PurgeCadence};
 use crate::db::schemas::tags::{Tag, NewTag, UpdateTag, TagResponse};
 use crate::db::tags_repository::TagRepository;
 use rand::Rng;
 use serde_json;
-use tauri::{State, Manager}; // Add these imports
+use tauri::{State, Manager};
 use sqlx::PgPool;
 use tauri_plugin_updater::UpdaterExt;
 use std::time::Duration;
 use tauri::Emitter;
 use tauri::AppHandle;
 use tauri::async_runtime::Mutex;
-use crate::updater::{Updater, UpdateCheckResult,  InstallerInfo};
+use crate::updater::{Updater, UpdateCheckResult, InstallerInfo};
+use crate::db::database::ClipboardRepository;
+use crate::session::get_current_session;
 
 #[tauri::command]
 pub async fn debug_get_specific_fields() -> serde_json::Value {
@@ -34,7 +35,7 @@ pub async fn get_all_entries(
     limit: Option<i64>,
     pool: tauri::State<'_, sqlx::PgPool>
 ) -> Result<Vec<ClipboardEntry>, String> {
-    crate::db::ClipboardRepository::get_all(&pool, limit)
+    ClipboardRepository::get_all(&pool, limit)
         .await
         .map_err(|e| e.to_string())
 }
@@ -48,7 +49,7 @@ pub async fn get_my_entries(
     let organization_id = crate::session::get_current_organization_id()
         .ok_or("User not logged in".to_string())?;
     
-    crate::db::ClipboardRepository::get_by_organization(&pool, &organization_id, limit)
+    ClipboardRepository::get_by_organization(&pool, &organization_id, limit)
         .await
         .map_err(|e| e.to_string())
 }
@@ -59,7 +60,7 @@ pub async fn get_recent_entries(
     pool: tauri::State<'_, sqlx::PgPool>
 ) -> Result<Vec<ClipboardEntry>, String> {
     let hours = hours.unwrap_or(24);
-    crate::db::ClipboardRepository::get_recent(&pool, hours)
+    ClipboardRepository::get_recent(&pool, hours)
         .await
         .map_err(|e| e.to_string())
 }
@@ -69,7 +70,7 @@ pub async fn get_entry_by_id(
     id: i64,
     pool: tauri::State<'_, sqlx::PgPool>
 ) -> Result<Option<ClipboardEntry>, String> {
-    crate::db::ClipboardRepository::get_by_id(&pool, id)
+    ClipboardRepository::get_by_id(&pool, id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -79,7 +80,7 @@ pub async fn delete_entry(
     id: i64,
     pool: tauri::State<'_, sqlx::PgPool>
 ) -> Result<bool, String> {
-    crate::db::ClipboardRepository::delete_entry(&pool, id)
+    ClipboardRepository::delete_entry(&pool, id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -90,7 +91,7 @@ pub async fn update_entry_content(
     new_content: String,
     pool: tauri::State<'_, sqlx::PgPool>
 ) -> Result<ClipboardEntry, String> {
-    crate::db::ClipboardRepository::update_entry_content(&pool, id, &new_content)
+    ClipboardRepository::update_entry_content(&pool, id, &new_content)
         .await
         .map_err(|e| e.to_string())
 }
@@ -100,7 +101,7 @@ pub async fn search_entries(
     query: String,
     pool: tauri::State<'_, sqlx::PgPool>
 ) -> Result<Vec<ClipboardEntry>, String> {
-    crate::db::ClipboardRepository::search_content(&pool, &query)
+    ClipboardRepository::search_content(&pool, &query)
         .await
         .map_err(|e| e.to_string())
 }
@@ -108,17 +109,26 @@ pub async fn search_entries(
 #[command]
 pub async fn update_entry(
     id: i64,
-    updates: serde_json::Value, // Or create a proper struct
+    updates: serde_json::Value,
     pool: tauri::State<'_, sqlx::PgPool>
 ) -> Result<ClipboardEntry, String> {
     use crate::db::schemas::UpdateClipboardEntry;
     
     let update_struct = UpdateClipboardEntry {
         is_pinned: updates.get("is_pinned").and_then(|v| v.as_bool()),
+        tags: updates.get("tags").and_then(|v| {
+            if v.is_string() {
+                Some(v.as_str().unwrap().to_string())
+            } else if v.is_array() {
+                serde_json::to_string(v).ok()
+            } else {
+                None
+            }
+        }),
         ..Default::default()
     };
     
-    crate::db::ClipboardRepository::update_entry(&pool, id, update_struct)
+    ClipboardRepository::update_entry(&pool, id, update_struct)
         .await
         .map_err(|e| e.to_string())
 }
@@ -127,7 +137,7 @@ pub async fn update_entry(
 pub async fn login_user(
     firebase_token: String,
     display_name: String,
-    // Remove organization_id parameter - let backend generate it
+    pool: State<'_, PgPool>,
 ) -> Result<UserResponse, String> {
     println!("🔐 Starting login_user command...");
     println!("👤 Received display name: {}", display_name);
@@ -136,11 +146,7 @@ pub async fn login_user(
     println!("✅ Firebase UID verified: {}", uid);
     println!("📧 User email: {}", email);
 
-    let pool = create_db_pool()
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-
-    // ✅ Check if user exists by UID
+    // ✅ Check if user exists by UID (using managed pool)
     if let Some(user) = UsersRepository::get_by_firebase_uid(&pool, &uid)
         .await
         .map_err(|e| e.to_string())?
@@ -162,7 +168,7 @@ pub async fn login_user(
     }
 
     // ✅ For new users, generate a proper organization ID
-    let new_organization_id = format!("org_{}", uid); // Or use a proper UUID
+    let new_organization_id = format!("org_{}", uid);
     
     let new_user = NewUser {
         firebase_uid: uid.clone(),
@@ -199,6 +205,7 @@ pub async fn signup_user(
     firebase_token: String,
     display_name: String,
     organization_id: String,
+    pool: State<'_, PgPool>,
 ) -> Result<UserResponse, String> {
     println!("🔐 Starting signup_user command...");
     println!("👤 Received display name: {}", display_name);
@@ -208,11 +215,7 @@ pub async fn signup_user(
     println!("✅ Firebase UID verified: {}", uid);
     println!("📧 User email: {}", email);
 
-    let pool = create_db_pool()
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-
-    // ✅ Check if user already exists
+    // ✅ Check if user already exists (using managed pool)
     if let Some(existing_user) = UsersRepository::get_by_firebase_uid(&pool, &uid)
         .await
         .map_err(|e| e.to_string())?
@@ -221,7 +224,7 @@ pub async fn signup_user(
         return Err("User already exists. Please login instead.".to_string());
     }
 
-    // ✅ Create new user
+    // ✅ Create new user (using managed pool)
     let new_user = NewUser {
         firebase_uid: uid.clone(),
         email: email.clone(),
@@ -257,15 +260,58 @@ pub async fn signup_user(
 #[command]
 pub async fn logout_user() -> Result<String, String> {
     crate::session::clear_current_user();
+    println!("Logging out user....");
     Ok("User logged out".to_string())
 }
 
+#[tauri::command]
+pub async fn validate_session(
+    pool: tauri::State<'_, sqlx::PgPool>
+) -> Result<Option<UserResponse>, String> {
+    // Get current user info from session
+    let user_id = crate::session::get_current_user_id();
+    let organization_id = crate::session::get_current_organization_id();
+    
+    println!("🔍 Validating session - User: {:?}, Org: {:?}", user_id, organization_id);
+    
+    // If no session data, return None
+    let user_id = match user_id {
+        Some(id) => id,
+        None => {
+            println!("No user ID in session");
+            return Ok(None);
+        }
+    };
+    
+    // Verify user still exists in database
+    match UsersRepository::get_by_firebase_uid(&pool, &user_id).await {
+        Ok(Some(user)) => {
+            println!("✅ Session valid for user: {}", user.email);
+            Ok(Some(UserResponse::from(user)))
+        }
+        Ok(None) => {
+            println!("❌ User not found in database");
+            crate::session::clear_current_user(); // Clean up invalid session
+            Ok(None)
+        }
+        Err(e) => {
+            println!("❌ Error validating session: {}", e);
+            Err(format!("Failed to validate session: {}", e))
+        }
+    }
+}
 
+#[tauri::command]
+pub async fn debug_session_state() -> serde_json::Value {
+    serde_json::json!({
+        "user_id": crate::session::get_current_user_id(),
+        "organization_id": crate::session::get_current_organization_id(),
+        "email": crate::session::get_current_user_email(),
+        "is_logged_in": crate::session::is_user_logged_in()
+    })
+}
 
-
-
-//Tags Commannds
-
+// Tags Commands
 #[tauri::command]
 pub async fn get_organization_tags(
     pool: tauri::State<'_, sqlx::PgPool>
@@ -276,7 +322,7 @@ pub async fn get_organization_tags(
     println!("🏢 Fetching tags for organization: {}", organization_id);
     
     let tag_repo = TagRepository::new(pool.inner().clone());
-    let tags: Vec<Tag> = tag_repo.get_organization_tags(&organization_id) // Specify type
+    let tags: Vec<Tag> = tag_repo.get_organization_tags(&organization_id)
         .await
         .map_err(|e: sqlx::Error| format!("Failed to fetch tags: {}", e))?;
     
@@ -318,7 +364,7 @@ pub async fn create_tag(
     let tag_repo = TagRepository::new(pool.inner().clone());
     
     // Check if tag name already exists in organization
-    let exists: bool = tag_repo.tag_name_exists(&organization_id, &name) // Specify type
+    let exists: bool = tag_repo.tag_name_exists(&organization_id, &name)
         .await
         .map_err(|e: sqlx::Error| format!("Failed to check tag existence: {}", e))?;
     
@@ -332,7 +378,7 @@ pub async fn create_tag(
         color: formatted_color,
     };
     
-    let created_tag: Tag = tag_repo.create_tag(&new_tag) // Specify type
+    let created_tag: Tag = tag_repo.create_tag(&new_tag)
         .await
         .map_err(|e: sqlx::Error| format!("Failed to create tag: {}", e))?;
     
@@ -365,13 +411,13 @@ pub async fn update_tag(
             }
             
             // Check if new name conflicts with existing tag
-            let exists: bool = tag_repo.tag_name_exists(&organization_id, name) // Specify type
+            let exists: bool = tag_repo.tag_name_exists(&organization_id, name)
                 .await
                 .map_err(|e: sqlx::Error| format!("Failed to check tag existence: {}", e))?;
             
             if exists {
                 // But allow if it's the same tag being updated
-                let current_tag: Option<Tag> = tag_repo.get_tag(tag_id, &organization_id) // Specify type
+                let current_tag: Option<Tag> = tag_repo.get_tag(tag_id, &organization_id)
                     .await
                     .map_err(|e: sqlx::Error| format!("Failed to get current tag: {}", e))?;
                 
@@ -395,7 +441,7 @@ pub async fn update_tag(
         }
     }
     
-    let updated_tag: Tag = tag_repo.update_tag(tag_id, &organization_id, &update_struct) // Specify type
+    let updated_tag: Tag = tag_repo.update_tag(tag_id, &organization_id, &update_struct)
         .await
         .map_err(|e: sqlx::Error| format!("Failed to update tag: {}", e))?
         .ok_or("Tag not found".to_string())?;
@@ -418,7 +464,7 @@ pub async fn delete_tag(
     let tag_repo = TagRepository::new(pool.inner().clone());
     
     // First check if tag exists and belongs to organization
-    let tag: Option<Tag> = tag_repo.get_tag(tag_id, &organization_id) // Specify type
+    let tag: Option<Tag> = tag_repo.get_tag(tag_id, &organization_id)
         .await
         .map_err(|e: sqlx::Error| format!("Failed to get tag: {}", e))?;
     
@@ -426,7 +472,7 @@ pub async fn delete_tag(
     
     println!("🗑️ Deleting tag: {} (ID: {})", tag.name, tag.id);
     
-    let deleted: bool = tag_repo.delete_tag(tag_id, &organization_id) // Specify type
+    let deleted: bool = tag_repo.delete_tag(tag_id, &organization_id)
         .await
         .map_err(|e: sqlx::Error| format!("Failed to delete tag: {}", e))?;
     
@@ -449,11 +495,11 @@ pub async fn get_tag_stats(
     println!("📊 Getting tag stats for organization: {}", organization_id);
     
     let tag_repo = TagRepository::new(pool.inner().clone());
-    let stats: Vec<crate::db::schemas::tags::TagStats> = tag_repo.get_tag_stats(&organization_id) // Specify type
+    let stats: Vec<crate::db::schemas::tags::TagStats> = tag_repo.get_tag_stats(&organization_id)
         .await
         .map_err(|e: sqlx::Error| format!("Failed to get tag stats: {}", e))?;
     
-    let tags: Vec<Tag> = tag_repo.get_organization_tags(&organization_id) // Specify type
+    let tags: Vec<Tag> = tag_repo.get_organization_tags(&organization_id)
         .await
         .map_err(|e: sqlx::Error| format!("Failed to get tags: {}", e))?;
     
@@ -470,36 +516,38 @@ pub async fn get_tag_stats(
 
 #[tauri::command]
 pub async fn assign_tag_to_entry(
-    app_handle: tauri::AppHandle,
     clipboard_entry_id: i64,
-    tag_name: String, // Change from tag_id to tag_name
-) -> Result<serde_json::Value, String> {
-    let pool = app_handle.try_state::<PgPool>()
-        .ok_or("Database pool not available")?;
+    tag_name: String,
+    pool: tauri::State<'_, sqlx::PgPool>
+) -> Result<ClipboardEntry, String> {
+    let organization_id = crate::session::get_current_organization_id()
+        .ok_or("User not logged in".to_string())?;
+
+    println!("🟢 Assigning tag '{}' to entry {}", tag_name, clipboard_entry_id);
     
-    match crate::db::database::ClipboardRepository::assign_tag(pool.inner(), clipboard_entry_id, &tag_name).await {
-        Ok(entry) => Ok(serde_json::to_value(entry).unwrap()),
-        Err(e) => Err(format!("Failed to assign tag: {}", e)),
-    }
+    // No need for explicit type annotation now
+    ClipboardRepository::assign_tag(&pool, clipboard_entry_id, &tag_name)
+        .await
 }
 
 #[tauri::command]
 pub async fn remove_tag_from_entry(
-    app_handle: tauri::AppHandle,
     clipboard_entry_id: i64,
-    tag_name: String, // Change from tag_id to tag_name
-) -> Result<serde_json::Value, String> {
-    let pool = app_handle.try_state::<PgPool>()
-        .ok_or("Database pool not available")?;
+    tag_name: String,
+    pool: tauri::State<'_, sqlx::PgPool>
+) -> Result<ClipboardEntry, String> {
+    let organization_id = crate::session::get_current_organization_id()
+        .ok_or("User not logged in".to_string())?;
+
+    println!("🔴 Removing tag '{}' from entry {}", tag_name, clipboard_entry_id);
     
-    match crate::db::database::ClipboardRepository::remove_tag(pool.inner(), clipboard_entry_id, &tag_name).await {
-        Ok(entry) => Ok(serde_json::to_value(entry).unwrap()),
-        Err(e) => Err(format!("Failed to remove tag: {}", e)),
-    }
+    // No need for explicit type annotation now
+    ClipboardRepository::remove_tag(&pool, clipboard_entry_id, &tag_name)
+        .await
 }
 
-//Purge Cadance
 
+// Add the missing purge_unpinned_entries command
 #[tauri::command]
 pub async fn purge_unpinned_entries(
     pool: tauri::State<'_, sqlx::PgPool>
@@ -507,11 +555,12 @@ pub async fn purge_unpinned_entries(
     let organization_id = crate::session::get_current_organization_id()
         .ok_or("User not logged in".to_string())?;
     
-    crate::db::database::ClipboardRepository::delete_unpinned_entries(&pool, &organization_id)
+    println!("🗑️ Purging all unpinned entries for organization: {}", organization_id);
+    
+    ClipboardRepository::delete_unpinned_entries(&pool, &organization_id)
         .await
         .map_err(|e| e.to_string())
 }
-
 
 #[tauri::command]
 pub async fn purge_entries_older_than(
@@ -521,7 +570,7 @@ pub async fn purge_entries_older_than(
     let organization_id = crate::session::get_current_organization_id()
         .ok_or("User not logged in".to_string())?;
     
-    crate::db::ClipboardRepository::delete_entries_older_than(&pool, &organization_id, days)
+    ClipboardRepository::delete_entries_older_than(&pool, &organization_id, days)
         .await
         .map_err(|e| e.to_string())
 }
@@ -534,7 +583,7 @@ pub async fn purge_unpinned_older_than(
     let organization_id = crate::session::get_current_organization_id()
         .ok_or("User not logged in".to_string())?;
     
-    crate::db::ClipboardRepository::delete_unpinned_older_than(&pool, &organization_id, days)
+    ClipboardRepository::delete_unpinned_older_than(&pool, &organization_id, days)
         .await
         .map_err(|e| e.to_string())
 }
@@ -647,8 +696,7 @@ pub async fn update_auto_purge_settings(
     Ok(UserResponse::from(updated_user))
 }
 
-//Updater Commands
-
+// Updater Commands
 pub fn setup_silent_auto_updater(app: &tauri::AppHandle) {
     let app_handle = app.clone();
     
@@ -661,8 +709,6 @@ pub fn setup_silent_auto_updater(app: &tauri::AppHandle) {
         }
     });
 
-
-    
     let app_handle_periodic = app.clone();
     tokio::spawn(async move {
         loop {
@@ -708,10 +754,6 @@ pub async fn check_and_install_update_silently(app: &tauri::AppHandle) -> Result
     }
 }
 
-
-
-
-
 #[tauri::command]
 pub async fn check_for_updates(_app_handle: AppHandle) -> Result<UpdateCheckResult, String> {
     // Replace with your actual GitHub info
@@ -733,7 +775,7 @@ pub async fn download_update(
     download_url: String,
     updater_state: State<'_, Mutex<Option<Updater>>>,
 ) -> Result<InstallerInfo, String> {
-    let mut updater_guard = updater_state.lock().await; // Use .await instead of .unwrap()
+    let mut updater_guard = updater_state.lock().await;
     
     if updater_guard.is_none() {
         *updater_guard = Some(Updater::new("Shivanshudeveloper", "clipboard_updates", "0.2.4"));
@@ -751,7 +793,7 @@ pub async fn install_downloaded_update(
     installer_info: InstallerInfo,
     updater_state: State<'_, Mutex<Option<Updater>>>,
 ) -> Result<(), String> {
-    let updater_guard = updater_state.lock().await; // Use .await instead of .unwrap()
+    let updater_guard = updater_state.lock().await;
     
     if let Some(updater) = updater_guard.as_ref() {
         updater.install_downloaded_update(installer_info).await
@@ -764,7 +806,7 @@ pub async fn install_downloaded_update(
 pub async fn cancel_update(
     updater_state: State<'_, Mutex<Option<Updater>>>,
 ) -> Result<(), String> {
-    let mut updater_guard = updater_state.lock().await; // Use .await instead of .unwrap()
+    let mut updater_guard = updater_state.lock().await;
     
     if let Some(updater) = updater_guard.as_mut() {
         updater.cleanup();
@@ -774,14 +816,11 @@ pub async fn cancel_update(
     Ok(())
 }
 
-
-
 #[tauri::command]
 pub async fn auto_update(app_handle: AppHandle) -> Result<bool, String> {
     let mut updater = Updater::new("Shivanshudeveloper", "clipboard_updates", "0.2.4");
     updater.auto_update(app_handle).await
 }
-
 
 #[tauri::command]
 pub async fn check_and_notify_updates(app_handle: AppHandle) -> Result<(), String> {
