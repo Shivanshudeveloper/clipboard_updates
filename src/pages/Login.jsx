@@ -3,7 +3,6 @@ import { Mail, Lock, Eye, EyeOff } from "lucide-react";
 import { FcGoogle } from "react-icons/fc";
 import { Link, useNavigate } from "react-router-dom";
 import { 
-  handleGoogleSignIn, 
   handleRedirectResult, 
   getCurrentUser,
   checkFirebaseSetup,
@@ -14,10 +13,8 @@ import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { invoke } from "@tauri-apps/api/core";
 
 // Helper function to get organization ID for a user
-// Helper function - now just for returning users
 async function getOrganizationIdForUser(userId) {
   try {
-    // Only check localStorage for existing users
     const storedUser = localStorage.getItem('user');
     
     if (storedUser) {
@@ -27,32 +24,24 @@ async function getOrganizationIdForUser(userId) {
       }
     }
     
-    return null; // Let backend handle organization creation
-    
+    return null;
   } catch (error) {
-    return null; // Let backend handle it
+    return null;
   }
 }
 
 // Handle post-login processing for both email and Google auth
-// Handle post-login processing for both email and Google auth
 async function handlePostLogin(user, navigate) {
   try {
-    
-    // Step 1: Get the Firebase ID token
     const idToken = await user.getIdToken();
     
-    // Step 2: Call backend WITHOUT organizationId - let backend handle it
     const userResponse = await invoke('login_user', {
       firebaseToken: idToken,
       displayName: user.displayName || "User",
-      // 🚨 REMOVE organizationId parameter - backend should provide it
     });
     
-    
-    // The rest of your code...
   } catch (error) {
-    alert(`Login processing failed: ${error.message}`);
+    throw new Error(`Login processing failed: ${error.message}`);
   }
 }
 
@@ -62,67 +51,57 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [debugInfo, setDebugInfo] = useState("");
+  const [error, setError] = useState("");
   const navigate = useNavigate();
 
-
-useEffect(() => {
-  const auth = getAuth();
-  
-  const unsubscribe = onAuthStateChanged(auth, async (user) => {
-    if (user) {
-      try {
-        console.log("🔄 Firebase user found, recreating backend session...");
-        
-        // Step 1: Get fresh Firebase token
-        const idToken = await user.getIdToken(true);
-        
-        // Step 2: Call login_user to recreate the Rust backend session
-        const userResponse = await invoke('login_user', {
-          firebaseToken: idToken,
-          displayName: user.displayName || "User",
-        });
-        
-        console.log("✅ Backend session recreated successfully");
-        
-        // Step 3: Now navigate to home
-        navigate("/home");
-        
-      } catch (error) {
-        console.error("❌ Failed to recreate backend session:", error);
-        // If recreation fails, clear auth and go to login
-        await auth.signOut();
-        navigate("/login");
+  useEffect(() => {
+    const auth = getAuth();
+    
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        try {
+          console.log("🔄 Firebase user found, recreating backend session...");
+          
+          const idToken = await user.getIdToken(true);
+          
+          const userResponse = await invoke('login_user', {
+            firebaseToken: idToken,
+            displayName: user.displayName || "User",
+          });
+          
+          console.log("✅ Backend session recreated successfully");
+          navigate("/home");
+          
+        } catch (error) {
+          console.error("❌ Failed to recreate backend session:", error);
+          await auth.signOut();
+          navigate("/login");
+        }
+      } else {
+        console.log("🔴 No Firebase user, showing login page");
+        if (window.location.pathname !== '/login') {
+          navigate("/login");
+        }
       }
-    } else {
-      console.log("🔴 No Firebase user, showing login page");
-      if (window.location.pathname !== '/login') {
-        navigate("/login");
-      }
-    }
-  });
+    });
 
-  return () => unsubscribe();
-}, [navigate]);
-
+    return () => unsubscribe();
+  }, [navigate]);
 
   const handleEmailLogin = async (e) => {
     e.preventDefault();
     if (!email || !password) return;
     
     setIsLoading(true);
+    setError(""); // Clear previous errors
     
     try {
-      
-      // Step 1: Use the real Firebase authentication
       const user = await signInWithEmail(email, password);
-      
-      // Use the handlePostLogin function for consistency
       await handlePostLogin(user, navigate);
       
     } catch (error) {
       console.error("❌ Login failed:", error);
       
-      // Handle specific error cases
       let errorMessage = "Login failed. Please try again.";
       
       switch (error.code) {
@@ -136,34 +115,17 @@ useEffect(() => {
           errorMessage = "No account found with this email.";
           break;
         case 'auth/wrong-password':
-          errorMessage = "Incorrect password.";
+          errorMessage = "Invalid email or password.";
           break;
         case 'auth/too-many-requests':
           errorMessage = "Too many failed attempts. Please try again later.";
           break;
         default:
-          errorMessage = error.message;
+          errorMessage = "Invalid email or password.";
       }
       
-      alert(`Login Error: ${errorMessage}`);
+      setError(errorMessage);
     } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    try {
-      setIsLoading(true);
-      
-      const result = await handleGoogleSignIn();
-      
-      // The page will redirect away, so we don't need to do anything else
-      // User will be redirected back to our app after authentication
-      // The redirect result will be handled in the useEffect
-      
-    } catch (err) {
-      console.error("Google login failed:", err);
-      alert(`Google login failed: ${err.message}`);
       setIsLoading(false);
     }
   };
@@ -217,7 +179,10 @@ useEffect(() => {
               <input
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setError(""); // Clear error when user starts typing
+                }}
                 className="w-full h-10 pl-10 pr-3 border border-gray-300 rounded-lg bg-white text-gray-800 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 placeholder="Enter your email"
                 required
@@ -235,7 +200,10 @@ useEffect(() => {
               <input
                 type={showPassword ? "text" : "password"}
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setError(""); // Clear error when user starts typing
+                }}
                 className="w-full h-10 pl-10 pr-10 border border-gray-300 rounded-lg bg-white text-gray-800 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 placeholder="Enter your password"
                 required
@@ -248,6 +216,16 @@ useEffect(() => {
                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
+            
+            {/* Error Message */}
+            {error && (
+              <div className="mt-2 text-xs text-red-500 flex items-center">
+                <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                </svg>
+                {error}
+              </div>
+            )}
           </div>
 
           {/* Sign In Button */}
@@ -267,25 +245,6 @@ useEffect(() => {
           </button>
         </form>
 
-        {/* Divider */}
-        <div className="flex items-center my-6">
-          <div className="flex-1 border-t border-gray-300"></div>
-          <span className="px-3 text-xs text-gray-500 font-medium">OR</span>
-          <div className="flex-1 border-t border-gray-300"></div>
-        </div>
-
-        {/* OAuth Buttons */}
-        <div className="space-y-3">
-          <button
-            onClick={handleGoogleLogin}
-            disabled={isLoading}
-            className="w-full h-10 flex items-center justify-center gap-3 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm font-medium hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            <FcGoogle size={18} />
-            {isLoading ? "Redirecting..." : "Continue with Google"}
-          </button>
-        </div>
-        
         {/* Sign Up Link */}
         <div className="text-center mt-4 pt-4 border-t border-gray-200">
           <p className="text-xs text-gray-600">
