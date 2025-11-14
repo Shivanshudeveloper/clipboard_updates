@@ -3,20 +3,22 @@ import {
   Search, Copy, MoreHorizontal, X, Plus, LogOut, Settings
 } from "lucide-react";
 import { useClipboardDB } from "../hooks/useClipboardDB";
-import { useTagsDB } from "../hooks/useTagsDB";
+import { useTagsDB } from "../hooks/useTagsDB"; // Add this import
 import { INITIAL_TAGS } from "../mock/data";
 import { invoke } from "@tauri-apps/api/core";
-import { signOutUser } from "../libs/firebaseAuth";
-import { useNavigate, Link } from "react-router-dom";
+import { getCurrentUser, signOutUser } from "../libs/firebaseAuth";
+import { useNavigate,Link } from "react-router-dom";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
+
 import { SkeletonClipItem, SkeletonHeader, SkeletonTags } from "../components/home/SkeletonLoader";
+
 
 function isTauri() {
   return "__TAURI__" in window;
 }
 
 export default function ClipTray() {
-  const {
+const {
     getClipboardEntries,
     updateEntryContent,
     deleteEntry,
@@ -40,144 +42,117 @@ export default function ClipTray() {
   
   const navigate = useNavigate();
 
-  // Session restoration with proper error handling and retry logic
-  useEffect(() => {
-    let mounted = true;
-    let retryCount = 0;
-    const maxRetries = 3;
-
-    const checkAndRestoreSession = async () => {
-      if (!mounted) return;
-
-      try {
-        console.log("🔍 Checking session state...");
+useEffect(() => {
+  const checkAndRestoreSession = async () => {
+    try {
+      console.log("🔍 Checking session state...");
+      
+      // Check current session state
+      const sessionState = await invoke('debug_session_state');
+      console.log("🦀 Current session state:", sessionState);
+      
+      if (sessionState.is_logged_in) {
+        console.log("✅ Session is valid, proceeding...");
+        setSessionValid(true);
+        setSessionChecking(false);
+        return;
+      }
+      
+      console.log("🔄 No valid session, checking Firebase...");
+      
+      // If no session, check if we have a Firebase user
+      const auth = getAuth();
+      const firebaseUser = auth.currentUser;
+      
+      if (firebaseUser) {
+        console.log("🔥 Firebase user found:", firebaseUser.email);
         
-        // Check current session state
-        const sessionState = await invoke('debug_session_state');
-        console.log("🦀 Current session state:", sessionState);
+        // First, check if database is ready
+        console.log("🔄 Checking if database is ready...");
+        const dbReady = await invoke('check_database_status');
         
-        if (sessionState.is_logged_in) {
-          console.log("✅ Session is valid, proceeding...");
-          setSessionValid(true);
-          setSessionChecking(false);
+        if (!dbReady) {
+          console.log("⏳ Database not ready yet, waiting...");
+          // Wait a bit and try again
+          setTimeout(() => {
+            checkAndRestoreSession();
+          }, 1000);
           return;
         }
         
-        console.log("🔄 No valid session, checking Firebase...");
+        console.log("✅ Database is ready, restoring Rust session...");
         
-        // If no session, check if we have a Firebase user
-        const auth = getAuth();
-        const firebaseUser = auth.currentUser;
-        
-        if (firebaseUser) {
-          console.log("🔥 Firebase user found:", firebaseUser.email);
+        try {
+          // Restore the Rust session
+          const idToken = await firebaseUser.getIdToken(true);
+          const userResponse = await invoke('login_user', {
+            firebaseToken: idToken,
+            displayName: firebaseUser.displayName || "User",
+          });
           
-          // Check if database is ready
-          console.log("🔄 Checking if database is ready...");
-          const dbReady = await invoke('check_database_status');
+          console.log("✅ Rust session restored successfully");
+          setSessionValid(true);
           
-          if (!dbReady) {
-            if (retryCount < maxRetries) {
-              retryCount++;
-              console.log(`⏳ Database not ready, retrying... (${retryCount}/${maxRetries})`);
-              setTimeout(() => {
-                checkAndRestoreSession();
-              }, 1000);
-              return;
-            } else {
-              throw new Error("Database not ready after multiple retries");
-            }
-          }
+        } catch (restoreError) {
+          console.error("❌ Rust session restoration failed:", restoreError);
           
-          console.log("✅ Database is ready, restoring Rust session...");
-          
+          // Try alternative approach - use validate_session if available
           try {
-            // Restore the Rust session
-            const idToken = await firebaseUser.getIdToken(true);
-            await invoke('login_user', {
+            console.log("🔄 Trying alternative session restoration...");
+            const sessionValid = await invoke('validate_session', {
               firebaseToken: idToken,
-              displayName: firebaseUser.displayName || "User",
             });
             
-            console.log("✅ Rust session restored successfully");
-            setSessionValid(true);
-            
-          } catch (restoreError) {
-            console.error("❌ Rust session restoration failed:", restoreError);
-            
-            // Try alternative approach
-            try {
-              console.log("🔄 Trying alternative session restoration...");
-              const idToken = await firebaseUser.getIdToken(true);
-              const sessionValid = await invoke('validate_session', {
-                firebaseToken: idToken,
-              });
-              
-              if (sessionValid) {
-                console.log("✅ Session validated via alternative method");
-                setSessionValid(true);
-              } else {
-                throw new Error("Alternative method failed");
-              }
-            } catch (altError) {
-              console.error("❌ Alternative restoration failed:", altError);
-              // Continue with Firebase user only as fallback
-              console.log("🟡 Continuing with Firebase user only");
+            if (sessionValid) {
+              console.log("✅ Session validated via alternative method");
               setSessionValid(true);
+            } else {
+              throw new Error("Alternative method failed");
             }
-          }
-        } else {
-          console.log("🔴 No Firebase user, redirecting to login");
-          navigate("/login");
-          return;
-        }
-        
-      } catch (error) {
-        console.error("❌ Session restoration failed:", error);
-        if (mounted) {
-          // Check if it's a database not ready error
-          const errorStr = error.toString();
-          if ((errorStr.includes('state not managed') || errorStr.includes('pool')) && retryCount < maxRetries) {
-            retryCount++;
-            console.log(`🔄 Database not ready, retrying... (${retryCount}/${maxRetries})`);
-            setTimeout(() => {
-              checkAndRestoreSession();
-            }, 1000);
-          } else {
-            navigate("/login");
+          } catch (altError) {
+            console.error("❌ Alternative restoration failed:", altError);
+            // Last resort: continue with Firebase user only
+            console.log("🟡 Continuing with Firebase user only");
+            setSessionValid(true);
           }
         }
-      } finally {
-        if (mounted) {
-          setSessionChecking(false);
-        }
+      } else {
+        console.log("🔴 No Firebase user, redirecting to login");
+        navigate("/login");
+        return;
       }
-    };
+      
+    } catch (error) {
+      console.error("❌ Session restoration failed:", error);
+      // Check if it's a database not ready error
+      if (error.toString().includes('state not managed') || error.toString().includes('pool')) {
+        console.log("🔄 Database not ready, retrying in 2 seconds...");
+        setTimeout(() => {
+          checkAndRestoreSession();
+        }, 1000);
+      } else {
+        navigate("/login");
+      }
+    } finally {
+      setSessionChecking(false);
+    }
+  };
 
-    // Start session restoration with a delay to allow backend initialization
-    const timer = setTimeout(() => {
-      checkAndRestoreSession();
-    }, 1000);
+  // Start session restoration with a delay to allow backend initialization
+  setTimeout(() => {
+    checkAndRestoreSession();
+  }, 1000);
+}, [navigate]);
 
-    return () => {
-      mounted = false;
-      clearTimeout(timer);
-    };
-  }, [navigate]);
-
-  // Auto-fetch with polling - only if session is valid
+  // ✅ Auto-fetch with polling - but only if session is valid
   useEffect(() => {
     if (!isTauri() || !sessionValid) return;
     
-    let mounted = true;
-
     const loadEntries = async () => {
-      if (!mounted) return;
-      
       try {
         console.log("📥 Loading clipboard entries...");
         const data = await getClipboardEntries(100);
-        if (mounted && Array.isArray(data)) {
+        if (Array.isArray(data)) {
           console.log(`✅ Loaded ${data.length} entries`);
           setLocalItems(data);
         }
@@ -195,57 +170,46 @@ export default function ClipTray() {
 
     // Start polling for real-time updates every 3 seconds
     const cleanup = startPolling((newEntries) => {
-      if (mounted && Array.isArray(newEntries)) {
+      if (Array.isArray(newEntries)) {
         setLocalItems(newEntries);
       }
     }, 3000);
 
-    return () => {
-      mounted = false;
-      cleanup();
-    };
+    return cleanup; // Cleanup on unmount
   }, [getClipboardEntries, startPolling, sessionValid, navigate]);
 
   const [q, setQ] = useState("");
-  const [tags, setTags] = useState([]);
+  const [tags, setTags] = useState([]); // Start with empty array, fetch from backend
   const [menu, setMenu] = useState(null);
   const [activeTag, setActiveTag] = useState("all");
   const [tagDropdown, setTagDropdown] = useState(null);
   const [createTagModal, setCreateTagModal] = useState(false);
   const [newTagName, setNewTagName] = useState("");
   const [pinnedItems, setPinnedItems] = useState(new Set());
+  const [itemTags, setItemTags] = useState({});
 
-  // Load tags when session is valid
   useEffect(() => {
     if (!sessionValid) return;
-
-    let mounted = true;
 
     const loadTags = async () => {
       try {
         console.log("🏷️ Loading tags...");
         const backendTags = await getTags();
-        if (mounted && Array.isArray(backendTags)) {
+        if (Array.isArray(backendTags)) {
           console.log(`✅ Loaded ${backendTags.length} tags`);
           setTags(backendTags);
         }
       } catch (err) {
         console.error("Error loading tags:", err);
         // Fallback to initial tags if backend fails
-        if (mounted) {
-          setTags(INITIAL_TAGS);
-        }
+        setTags(INITIAL_TAGS);
       }
     };
 
     loadTags();
-
-    return () => {
-      mounted = false;
-    };
   }, [getTags, sessionValid]);
 
-  // Update pinned items from database data
+  // ✅ Update pinned items from database data
   useEffect(() => {
     const pinnedIds = new Set();
     localItems.forEach(item => {
@@ -256,55 +220,57 @@ export default function ClipTray() {
     setPinnedItems(pinnedIds);
   }, [localItems]);
 
-  // Process items for UI display
-  const items = useMemo(() => {
-    return localItems.map((item, index) => {
-      // Parse tags from database - handle both string and array formats
-      let tagsArray = [];
-      
-      if (item.tags) {
-        if (typeof item.tags === 'string') {
-          try {
-            let cleanTags = item.tags.trim().replace(/\\/g, '');
-            tagsArray = JSON.parse(cleanTags);
-          } catch (e) {
-            console.error("Error parsing tags JSON:", e, "Raw tags:", item.tags);
-            tagsArray = [];
-          }
-        } else if (Array.isArray(item.tags)) {
-          tagsArray = item.tags;
+  // ✅ Adapt DB data to your UI
+// In your useMemo that processes items, update the tags parsing:
+const items = useMemo(() => {
+  return localItems.map((item, index) => {
+    
+    // Parse tags from database - handle both string and array formats
+    let tagsArray = [];
+    
+    if (item.tags) {
+      if (typeof item.tags === 'string') {
+        try {
+          let cleanTags = item.tags.trim().replace(/\\/g, '');
+          tagsArray = JSON.parse(cleanTags);
+        } catch (e) {
+          console.error("Error parsing tags JSON:", e, "Raw tags:", item.tags);
+          tagsArray = [];
         }
+      } else if (Array.isArray(item.tags)) {
+        tagsArray = item.tags;
       }
-      
-      return {
-        id: item.id || `${item.timestamp}-${index}`,
-        content: item.text || item.content || "",
-        timestamp: item.timestamp,
-        content_type: item.content_type || "text",
-        source_app: item.source_app || "Unknown",
-        source_window: item.source_window || "",
-        pinned: item.is_pinned || pinnedItems.has(item.id),
-        tags: tagsArray
-      };
-    });
-  }, [localItems, pinnedItems]);
+    }
+    
+    const processedItem = {
+      id: item.id || `${item.timestamp}-${index}`,
+      content: item.text || item.content || "",
+      timestamp: item.timestamp,
+      content_type: item.content_type || "text",
+      source_app: item.source_app || "Unknown",
+      source_window: item.source_window || "",
+      pinned: item.is_pinned || pinnedItems.has(item.id),
+      tags: tagsArray  // This should now be a proper array
+    };
+    
+    return processedItem;
+  });
+}, [localItems, pinnedItems]);
 
-  // Filter items based on search and active tag
+  // Update the filtered items logic to work with tag names
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     let filteredItems = items;
     
     // Search filter
     if (s) {
-      filteredItems = filteredItems.filter(x => 
-        x.content.toLowerCase().includes(s)
-      );
+      filteredItems = filteredItems.filter(x => x.content.toLowerCase().includes(s));
     }
     
-    // Tag filter - using tag names
+    // Tag filter - now using tag names
     if (activeTag !== "all") {
       filteredItems = filteredItems.filter(item => 
-        item.tags && item.tags.includes(activeTag)
+        item.tags && item.tags.includes(activeTag) // Check if item has this tag name
       );
     }
     
@@ -319,7 +285,6 @@ export default function ClipTray() {
   const tagDropdownRef = useRef(null);
   const createTagModalRef = useRef(null);
 
-  // Close dropdowns on outside click or escape key
   useEffect(() => {
     function onKey(e) {
       if (e.key === "Escape") {
@@ -328,13 +293,11 @@ export default function ClipTray() {
         setCreateTagModal(false);
       }
     }
-    
     function onClick(e) {
       if (menuRef.current && menu && !menuRef.current.contains(e.target)) setMenu(null);
       if (tagDropdownRef.current && tagDropdown && !tagDropdownRef.current.contains(e.target)) setTagDropdown(null);
       if (createTagModalRef.current && createTagModal && !createTagModalRef.current.contains(e.target)) setCreateTagModal(false);
     }
-    
     window.addEventListener("keydown", onKey);
     window.addEventListener("mousedown", onClick);
     return () => {
@@ -352,7 +315,8 @@ export default function ClipTray() {
       await signOutUser();
       
       // Clear Rust backend session
-      await invoke('logout_user');
+      const result = await invoke('logout_user');
+      console.log(result);
       
       // Clear all local storage
       localStorage.removeItem('user');
@@ -399,14 +363,11 @@ export default function ClipTray() {
   const editItem = async (id) => {
     const current = items.find(x => x.id === id);
     if (!current) return;
-    
     try {
       const edited = await invoke("open_in_notepad_and_wait", { content: current.content });
       if (edited && edited.trim() !== current.content.trim()) {
         await updateEntryContent(id, edited);
-        setLocalItems(prev => prev.map(i => 
-          i.id === id ? { ...i, text: edited } : i
-        ));
+        setLocalItems(prev => prev.map(i => (i.id === id ? { ...i, text: edited } : i)));
         await navigator.clipboard.writeText(edited);
         alert("✅ Edited content updated!");
       }
@@ -428,19 +389,7 @@ export default function ClipTray() {
 
   const copyToClipboard = (text) => navigator.clipboard.writeText(text);
 
-  // Refresh clipboard data
-  const refreshClipboardData = async () => {
-    try {
-      const data = await getClipboardEntries(100);
-      if (Array.isArray(data)) {
-        setLocalItems(data);
-      }
-    } catch (err) {
-      console.error("Error refreshing data:", err);
-    }
-  };
-
-  // Create new tag
+  // ✅ Updated createNewTag to use backend
   const createNewTag = async () => {
     if (!newTagName.trim()) return;
     
@@ -461,84 +410,155 @@ export default function ClipTray() {
     }
   };
 
-  // Remove tag from item
-  const removeTagFromItem = async (itemId, tagName, e) => {
-    if (e) e.stopPropagation();
+
+const removeTagFromItem = async (itemId, tagName, e) => {
+  if (e) e.stopPropagation();
+  
+  try {
+    console.log("🔴 REMOVING tag:", tagName, "from item:", itemId);
     
-    try {
-      console.log("🔴 REMOVING tag:", tagName, "from item:", itemId);
-      
-      // Optimistically update the UI first for immediate feedback
-      setLocalItems(prev => prev.map(item => {
-        if (item.id === parseInt(itemId)) {
-          const currentTags = Array.isArray(item.tags) ? item.tags : [];
-          const newTags = currentTags.filter(t => t !== tagName);
-          console.log("🎯 Optimistic update - removing tag:", tagName, "New tags:", newTags);
-          return { ...item, tags: newTags };
-        }
-        return item;
-      }));
-
-      // Close any open dropdowns immediately
-      setTagDropdown(null);
-      setMenu(null);
-      
-      // Then make the API call
-      const updatedEntry = await invoke("remove_tag_from_entry", {
-        clipboardEntryId: parseInt(itemId),
-        tagName: tagName
-      });
-      
-      console.log("✅ Backend response:", updatedEntry);
-      
-    } catch (err) {
-      console.error("❌ Failed to remove tag:", err);
-      // Revert optimistic update on error by refreshing data
-      refreshClipboardData();
-    }
-  };
-
-  // Assign tag to item
-  const assignTagToItem = async (itemId, tagId) => {
-    try {
-      const tag = tags.find(t => t.id === tagId);
-      if (!tag) {
-        console.error("Tag not found with ID:", tagId);
-        return;
+    // Optimistically update the UI first for immediate feedback
+    setLocalItems(prev => prev.map(item => {
+      if (item.id === parseInt(itemId)) {
+        const currentTags = Array.isArray(item.tags) ? item.tags : [];
+        const newTags = currentTags.filter(t => t !== tagName);
+        console.log("🎯 Optimistic update - removing tag:", tagName, "New tags:", newTags);
+        return { ...item, tags: newTags };
       }
+      return item;
+    }));
 
-      console.log("🟢 ASSIGNING tag:", tag.name, "to item:", itemId);
-
-      // Optimistically update the UI first
-      setLocalItems(prev => prev.map(item => {
-        if (item.id === parseInt(itemId)) {
-          const currentTags = Array.isArray(item.tags) ? item.tags : [];
-          const newTags = [...currentTags, tag.name];
-          console.log("🎯 Optimistic update - adding tag:", tag.name, "New tags:", newTags);
-          return { ...item, tags: newTags };
+    // Close any open dropdowns immediately
+    setTagDropdown(null);
+    setMenu(null);
+    
+    // Then make the API call
+    const updatedEntry = await invoke("remove_tag_from_entry", {
+      clipboardEntryId: parseInt(itemId),
+      tagName: tagName
+    });
+    
+    console.log("✅ Backend response:", updatedEntry);
+    
+    // Parse the actual tags from backend response
+    let parsedTags = [];
+    if (updatedEntry.tags) {
+      if (typeof updatedEntry.tags === 'string') {
+        try {
+          let cleanTags = updatedEntry.tags.trim().replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+          if (cleanTags.startsWith('[') && cleanTags.endsWith(']')) {
+            parsedTags = JSON.parse(cleanTags);
+          } else {
+            parsedTags = [cleanTags];
+          }
+        } catch (e) {
+          console.error("Error parsing tags:", e);
+          parsedTags = [];
         }
-        return item;
-      }));
-
-      // Close dropdown immediately
-      setTagDropdown(null);
-
-      await invoke("assign_tag_to_entry", {
-        clipboardEntryId: parseInt(itemId),
-        tagName: tag.name
-      });
-      
-    } catch (err) {
-      console.error("❌ Failed to assign tag:", err);
-      refreshClipboardData();
+      } else if (Array.isArray(updatedEntry.tags)) {
+        parsedTags = updatedEntry.tags;
+      }
     }
-  };
+    
+    console.log("✅ Parsed tags from backend:", parsedTags);
+    
+    // Final sync with backend data
+    setLocalItems(prev => prev.map(item => {
+      if (item.id === parseInt(itemId)) {
+        const finalItem = { ...item, tags: parsedTags };
+        console.log("✅ Final item state:", finalItem);
+        return finalItem;
+      }
+      return item;
+    }));
+    
+  } catch (err) {
+    console.error("❌ Failed to remove tag:", err);
+    // Revert optimistic update on error by refreshing data
+    refreshClipboardData();
+  }
+};
 
-  // Delete tag
+// ✅ Fixed assignTagToItem function
+const assignTagToItem = async (itemId, tagId) => {
+  try {
+    const tag = tags.find(t => t.id === tagId);
+    if (!tag) {
+      console.error("Tag not found with ID:", tagId);
+      return;
+    }
+
+    console.log("🟢 ASSIGNING tag:", tag.name, "to item:", itemId);
+
+    // Optimistically update the UI first
+    setLocalItems(prev => prev.map(item => {
+      if (item.id === parseInt(itemId)) {
+        const currentTags = Array.isArray(item.tags) ? item.tags : [];
+        const newTags = [...currentTags, tag.name];
+        console.log("🎯 Optimistic update - adding tag:", tag.name, "New tags:", newTags);
+        return { ...item, tags: newTags };
+      }
+      return item;
+    }));
+
+    // Close dropdown immediately
+    setTagDropdown(null);
+
+    const updatedEntry = await invoke("assign_tag_to_entry", {
+      clipboardEntryId: parseInt(itemId),
+      tagName: tag.name
+    });
+    
+    console.log("✅ Assign response:", updatedEntry);
+    
+    // Parse tags from backend response
+    let parsedTags = [];
+    if (updatedEntry.tags) {
+      if (typeof updatedEntry.tags === 'string') {
+        try {
+          let cleanTags = updatedEntry.tags.trim().replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+          if (cleanTags.startsWith('[') && cleanTags.endsWith(']')) {
+            parsedTags = JSON.parse(cleanTags);
+          } else {
+            parsedTags = [cleanTags];
+          }
+        } catch (e) {
+          console.error("Error parsing tags in assign:", e);
+          parsedTags = [];
+        }
+      } else if (Array.isArray(updatedEntry.tags)) {
+        parsedTags = updatedEntry.tags;
+      }
+    }
+    
+    console.log("✅ Parsed tags from backend:", parsedTags);
+    
+    // Final sync with backend
+    setLocalItems(prev => prev.map(item => 
+      item.id === parseInt(itemId) ? { 
+        ...item, 
+        tags: parsedTags 
+      } : item
+    ));
+    
+  } catch (err) {
+    console.error("❌ Failed to assign tag:", err);
+    refreshClipboardData();
+  }
+};
+
+  // ✅ Updated deleteTag to use backend
   const handleDeleteTag = async (tagId) => {
     try {
       const success = await deleteTagBackend(tagId);
       if (success) {
+        setItemTags(prev => {
+          const newItemTags = { ...prev };
+          Object.keys(newItemTags).forEach(itemId => {
+            newItemTags[itemId] = newItemTags[itemId].filter(id => id !== tagId);
+          });
+          return newItemTags;
+        });
         setTags(prev => prev.filter(tag => tag.id !== tagId));
         if (activeTag === tagId.toString()) setActiveTag("all");
       }
@@ -554,8 +574,6 @@ export default function ClipTray() {
     const mins = Math.floor(diff / (1000 * 60));
     const hours = Math.floor(diff / (1000 * 60 * 60));
     const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    
-    if (mins < 1) return "Just now";
     if (mins < 60) return `${mins} min ago`;
     if (hours < 24) return `${hours} hour${hours > 1 ? "s" : ""} ago`;
     return `${days} day${days > 1 ? "s" : ""} ago`;
@@ -577,34 +595,20 @@ export default function ClipTray() {
     });
   };
 
-  const openContextMenuInCenter = (itemId) => {
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-    const dropdownWidth = 160;
-    const dropdownHeight = 140;
-    const x = (viewportWidth - dropdownWidth) / 2;
-    const y = (viewportHeight - dropdownHeight) / 2;
-    setMenu({
-      id: itemId,
-      x: Math.max(10, x),
-      y: Math.max(10, y)
-    });
-  };
-
-  // Loading states
   if (sessionChecking) {
     return (
       <div className="flex flex-col bg-white relative" style={{ height: '565px' }}>
         <div className="flex items-center justify-center h-full">
           <div className="text-center">
             <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-            <p className="text-sm text-gray-600">Loading Page...</p>
+            <p className="text-sm text-gray-600">Loading Page.....</p>
           </div>
         </div>
       </div>
     );
   }
 
+  
   if (initialLoad || tagsInitialLoad) {
     return (
       <div className="flex flex-col bg-white relative" style={{ height: '565px' }}>
@@ -654,12 +658,12 @@ export default function ClipTray() {
             <div className="w-5 h-5 rounded-md bg-gradient-to-r from-blue-500 to-blue-400 flex items-center justify-center text-white text-xs font-semibold">
               ⌘
             </div>
-            <h1 className="text-sm font-semibold text-gray-800">ClipTray</h1>
+            <h1 className="text-sm font-semibold text-gray-800">ClipTray 1.0</h1>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 ">
             <div className="mt-1">
               <Link to="/settings">
-                <Settings size={18} className="text-gray-600 hover:text-gray-800 transition-colors" />
+                <Settings size={18} className="text-gray-600" />
               </Link>
             </div>
             {/* Logout Button */}
@@ -682,7 +686,7 @@ export default function ClipTray() {
         <div className="relative">
           <Search size={12} className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400" />
           <input
-            className="w-full h-6 pl-7 pr-2 border border-gray-300 rounded-md bg-gray-50 text-gray-800 text-xs outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+            className="w-full h-6 pl-7 pr-2 border border-gray-300 rounded-md bg-gray-50 text-gray-800 text-xs outline-none focus:ring-1 focus:ring-blue-500"
             placeholder="Search clips"
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -711,7 +715,7 @@ export default function ClipTray() {
               <button
                 key={tag.id}
                 className={`flex items-center gap-0.5 py-0.5 px-1.5 text-xs font-medium rounded-full border transition-all whitespace-nowrap ${
-                  activeTag === tag.name
+                  activeTag === tag.name // Use tag.name instead of tag.id.toString()
                     ? "text-white border-transparent" 
                     : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
                 }`}
@@ -719,7 +723,7 @@ export default function ClipTray() {
                   backgroundColor: activeTag === tag.name ? tag.color : 'transparent',
                   borderColor: activeTag === tag.name ? tag.color : ''
                 }}
-                onClick={() => setActiveTag(tag.name)}
+                onClick={() => setActiveTag(tag.name)} // Set to tag name
               >
                 {tag.name}
               </button>
@@ -749,8 +753,9 @@ export default function ClipTray() {
                     key={item.id} 
                     item={item} 
                     tags={tags}
+                    getTagById={getTagById}
                     onCopy={copyToClipboard}
-                    onMenuOpen={openContextMenuInCenter}
+                    onMenuOpen={setMenu}
                     onTagClick={openTagDropdownForMenu}
                     onRemoveTag={removeTagFromItem}
                     formatTime={formatTime}
@@ -781,8 +786,9 @@ export default function ClipTray() {
                     key={item.id} 
                     item={item} 
                     tags={tags}
+                    getTagById={getTagById}
                     onCopy={copyToClipboard}
-                    onMenuOpen={openContextMenuInCenter}
+                    onMenuOpen={setMenu}
                     onTagClick={openTagDropdownForMenu}
                     onRemoveTag={removeTagFromItem}
                     formatTime={formatTime}
@@ -802,30 +808,33 @@ export default function ClipTray() {
       {menu && (
         <div
           ref={menuRef}
-          className="absolute bg-white rounded-lg shadow-lg p-1.5 min-w-[120px] z-50 border border-gray-200"
+          className="absolute bg-white rounded-lg shadow-lg p-1.5 min-w-[120px] z-50"
           style={{ left: menu.x, top: menu.y }}
         >
           <button
-            className="w-full py-1 text-left text-xs text-gray-800 hover:bg-gray-100 rounded-md transition-colors"
+            className="w-full py-1 text-left text-xs text-gray-800 hover:bg-gray-100 rounded-md"
             onClick={() => togglePin(menu.id)}
           >
             {items.find((x) => x.id === menu.id)?.pinned ? "Unpin" : "Pin"}
           </button>
           <button
-            className="w-full py-1 text-left text-xs text-gray-800 hover:bg-gray-100 rounded-md transition-colors"
+            className="w-full py-1 text-left text-xs text-gray-800 hover:bg-gray-100 rounded-md"
             onClick={() => editItem(menu.id)}
           >
             {isTauri() ? "Edit" : "Edit Not"}
           </button>
           <button 
-            className="w-full py-1 text-left text-xs text-gray-800 hover:bg-gray-100 rounded-md transition-colors"
-            onClick={() => openTagDropdownForMenu(menu.id)}
+            className="w-full py-1 text-left text-xs text-gray-800 hover:bg-gray-100 rounded-md"
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              openTagDropdownForMenu(menu.id, rect);
+            }}
           >
             Tags
           </button>
           <div className="h-px bg-gray-200 my-1"></div>
           <button
-            className="w-full py-1 text-left text-xs text-red-500 hover:bg-gray-100 rounded-md transition-colors"
+            className="w-full py-1 text-left text-xs text-red-500 hover:bg-gray-100 rounded-md"
             onClick={() => deleteItem(menu.id)}
           >
             Delete
@@ -847,54 +856,54 @@ export default function ClipTray() {
           <div className="flex justify-between items-center mb-1">
             <h3 className="text-xs font-semibold text-gray-800">Assign Tags</h3>
             <button
-              className="text-gray-400 hover:text-gray-600 p-0.5 transition-colors"
+              className="text-gray-400 hover:text-gray-600 p-0.5"
               onClick={() => setTagDropdown(null)}
             >
               <X size={12} />
             </button>
           </div>
 
-          <div className="space-y-0.5 max-h-32 overflow-y-auto">
-            {tags.map(tag => {
-              const currentItem = items.find(item => item.id === tagDropdown.itemId);
-              const hasTag = currentItem?.tags?.includes(tag.name);
+         <div className="space-y-0.5 max-h-32 overflow-y-auto">
+  {tags.map(tag => {
+    const currentItem = items.find(item => item.id === tagDropdown.itemId);
+    const hasTag = currentItem?.tags?.includes(tag.name);
+    
+    return (  
+      <label key={tag.id} className="flex items-center gap-1.5 p-1 hover:bg-gray-50 rounded-md cursor-pointer">
+        <div className="relative inline-flex items-center">
+          <input
+            type="checkbox"
+            checked={!!hasTag}
+            onChange={(e) => {
+              const shouldAssign = e.target.checked;
               
-              return (  
-                <label key={tag.id} className="flex items-center gap-1.5 p-1 hover:bg-gray-50 rounded-md cursor-pointer transition-colors">
-                  <div className="relative inline-flex items-center">
-                    <input
-                      type="checkbox"
-                      checked={!!hasTag}
-                      onChange={(e) => {
-                        const shouldAssign = e.target.checked;
-                        
-                        if (shouldAssign && !hasTag) {
-                          assignTagToItem(tagDropdown.itemId, tag.id);
-                        } else if (!shouldAssign && hasTag) {
-                          removeTagFromItem(tagDropdown.itemId, tag.name);
-                        }
-                      }}
-                      className="absolute opacity-0 w-4 h-4 cursor-pointer z-10"
-                    />
-                    <div className={`w-4 h-4 flex items-center justify-center ${hasTag ? 'text-blue-500' : 'text-gray-300'}`}>
-                      {hasTag ? (
-                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                        </svg>
-                      ) : (
-                        <div className="w-4 h-4 border border-gray-300 rounded-sm" />
-                      )}
-                    </div>
-                  </div>
-                  <span className="text-xs text-gray-700 flex-1">{tag.name}</span>
-                </label>
-              );
-            })}
+              if (shouldAssign && !hasTag) {
+                assignTagToItem(tagDropdown.itemId, tag.id);
+              } else if (!shouldAssign && hasTag) {
+                removeTagFromItem(tagDropdown.itemId, tag.name);
+              }
+            }}
+            className="absolute opacity-0 w-4 h-4 cursor-pointer z-10"
+          />
+          <div className={`w-4 h-4 flex items-center justify-center ${hasTag ? 'text-blue-500' : 'text-gray-300'}`}>
+            {hasTag ? (
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+              </svg>
+            ) : (
+              <div className="w-4 h-4 border border-gray-300 rounded-sm" />
+            )}
           </div>
+        </div>
+        <span className="text-xs text-gray-700 flex-1">{tag.name}</span>
+      </label>
+    );
+  })}
+</div>
           
           <div className="mt-1 pt-1 border-t border-gray-200">
             <button
-              className="w-full flex items-center justify-center gap-1 py-1 text-xs text-blue-500 hover:bg-blue-50 rounded-md transition-colors"
+              className="w-full flex items-center justify-center gap-1 py-1 text-xs text-blue-500 hover:bg-blue-50 rounded-md"
               onClick={() => {
                 setTagDropdown(null);
                 setCreateTagModal(true);
@@ -909,7 +918,7 @@ export default function ClipTray() {
 
       {/* Create Tag Modal */}
       {createTagModal && (
-        <div className="absolute inset-0 flex items-center justify-center z-50 bg-black bg-opacity-50">
+        <div className="absolute inset-0 flex items-center justify-center z-50">
           <div
             ref={createTagModalRef}
             className="bg-white rounded-lg shadow-lg p-2 w-64 max-w-full mx-4 border border-gray-200"
@@ -917,7 +926,7 @@ export default function ClipTray() {
             <div className="flex justify-between items-center mb-2">
               <h3 className="text-sm font-semibold text-gray-800">Manage Tags</h3>
               <button
-                className="text-gray-400 hover:text-gray-600 p-0.5 transition-colors"
+                className="text-gray-400 hover:text-gray-600 p-0.5"
                 onClick={() => setCreateTagModal(false)}
               >
                 <X size={16} />
@@ -934,12 +943,12 @@ export default function ClipTray() {
                     type="text"
                     value={newTagName}
                     onChange={(e) => setNewTagName(e.target.value)}
-                    className="flex-1 px-2 py-1 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-xs transition-colors"
+                    className="flex-1 px-2 py-1 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-xs"
                     placeholder="Enter tag name"
                     onKeyPress={(e) => e.key === 'Enter' && createNewTag()}
                   />
                   <button
-                    className="py-1 px-2 text-xs text-white bg-blue-500 rounded-md hover:bg-blue-600 disabled:opacity-50 transition-colors"
+                    className="py-1 px-2 text-xs text-white bg-blue-500 rounded-md hover:bg-blue-600 disabled:opacity-50"
                     onClick={createNewTag}
                     disabled={!newTagName.trim() || tagsLoading}
                   >
@@ -965,7 +974,7 @@ export default function ClipTray() {
                       </div>
                       <button
                         onClick={() => handleDeleteTag(tag.id)}
-                        className="text-gray-400 hover:text-red-500 p-0.5 transition-colors"
+                        className="text-gray-400 hover:text-red-500 p-0.5"
                         disabled={tagsLoading}
                       >
                         <X size={12} />
@@ -978,7 +987,7 @@ export default function ClipTray() {
             
             <div className="flex gap-1 mt-3">
               <button
-                className="flex-1 py-1 text-xs text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+                className="flex-1 py-1 text-xs text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50"
                 onClick={() => setCreateTagModal(false)}
                 disabled={tagsLoading}
               >
@@ -997,7 +1006,7 @@ export default function ClipTray() {
   );
 }
 
-// ClipItem component
+// ClipItem component remains the same
 function ClipItem({ item, tags, onCopy, onMenuOpen, onTagClick, onRemoveTag, formatTime }) {
   
   return (
@@ -1009,7 +1018,7 @@ function ClipItem({ item, tags, onCopy, onMenuOpen, onTagClick, onRemoveTag, for
         {item.content}
       </div>
       
-      {/* Tags display */}
+      {/* Tags display - with better debugging */}
       {item.tags && item.tags.length > 0 ? (
         <div className="flex flex-wrap gap-0.5 mb-0.5">
           {item.tags.map((tagName, index) => {
@@ -1020,7 +1029,7 @@ function ClipItem({ item, tags, onCopy, onMenuOpen, onTagClick, onRemoveTag, for
             return (
               <span
                 key={`${tagName}-${index}`}
-                className="inline-flex items-center gap-0.5 py-0.5 px-1 text-xs font-medium rounded-full border transition-colors"
+                className="inline-flex items-center gap-0.5 py-0.5 px-1 text-xs font-medium rounded-full border"
                 style={{
                   backgroundColor: `${tagColor}20`,
                   color: tagColor,
@@ -1033,14 +1042,14 @@ function ClipItem({ item, tags, onCopy, onMenuOpen, onTagClick, onRemoveTag, for
           })}
         </div>
       ) : (
-        <div className="text-xs text-gray-400 mb-0.5">No tags</div>
+        <div className="text-xs text-gray-400 mb-0.5">No tags</div> // Show when no tags
       )}
       
       <div className="flex justify-between items-center">
         <span className="text-xs text-gray-400">{formatTime(item.timestamp)}</span>
         <div className="flex gap-0.5">
           <button
-            className="flex items-center gap-0.5 bg-gray-100 rounded-md py-0.5 px-1.5 text-xs font-medium text-gray-600 hover:bg-gray-200 transition-colors"
+            className="flex items-center gap-0.5 bg-gray-100 rounded-md py-0.5 px-1.5 text-xs font-medium text-gray-600 hover:bg-gray-200"
             onClick={(e) => {
               e.stopPropagation();
               onCopy(item.content);
@@ -1050,10 +1059,15 @@ function ClipItem({ item, tags, onCopy, onMenuOpen, onTagClick, onRemoveTag, for
           </button>
          
           <button
-            className="bg-transparent rounded-full p-0.5 text-gray-600 hover:bg-gray-100 transition-colors"
+            className="bg-transparent rounded-full p-0.5 text-gray-600 hover:bg-gray-100"
             onClick={(e) => {
               e.stopPropagation();
-              onMenuOpen(item.id);
+              const rect = e.currentTarget.getBoundingClientRect();
+              onMenuOpen({
+                id: item.id,
+                x: rect.right - 120,
+                y: rect.bottom + 4,
+              });
             }}
           >
             <MoreHorizontal size={12} />

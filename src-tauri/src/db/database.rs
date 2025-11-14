@@ -1,28 +1,18 @@
 // src/db/database.rs
 use sqlx::{PgPool, postgres::PgPoolOptions};
-use std::env;
 use crate::db::schemas::{ClipboardEntry, NewClipboardEntry, UpdateClipboardEntry};
+use crate::config::{get_database_url};
 use serde_json;
 
-pub async fn create_db_pool() -> Result<PgPool, Box<dyn std::error::Error>> {
-    // Load .env file
-    // dotenv::dotenv().ok();
-    
-    // let database_url = env::var("DATABASE_URL")
-    //  let database_url = "postgresql://neondb_owner:npg_iu1eMYPHfAV8@ep-young-bush-affo5mc7-pooler.c-2.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
-   
-     //Testing
-    
-    let database_url = "postgresql://neondb_owner:npg_bxlnSc2N3vZO@ep-super-sound-ahwuqcgc-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
-    
-    println!("🔗 Connecting to database...");
+pub async fn create_db_pool() -> Result<PgPool, Box<dyn std::error::Error>> {   
+    let database_url = get_database_url();
+    println!("Connecting to database...");
     
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .connect(&database_url)
         .await?;
     
-    // Simple connection test
     sqlx::query("SELECT 1")
         .execute(&pool)
         .await?;    

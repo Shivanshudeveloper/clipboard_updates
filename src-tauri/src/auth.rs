@@ -2,8 +2,8 @@ use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use reqwest;
 use std::collections::HashMap;
-use std::env;
 use std::path::Path;
+use crate::config::{get_firebase_project_id};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct FirebaseClaims {
@@ -17,18 +17,8 @@ struct FirebaseClaims {
 }
 
 pub async fn verify_firebase_token(id_token: &str) -> Result<(String, String, Option<String>), String> {
-    // Load .env from project root (where Cargo.toml is)
-    load_env_from_root();
     
-    // let firebase_project_id = env::var("FIREBASE_PROJECT_ID")
-        let firebase_project_id ="mealpro-development";
-    
-        // let firebase_project_id = env::var("FIREBASE_PROJECT_ID")
-        // .map_err(|e| format!("FIREBASE_PROJECT_ID environment variable not set: {}", e))?;
-
-    println!("🔐 Verifying token for project: {}", firebase_project_id);
-
-
+    let firebase_project_id =get_firebase_project_id();
     println!("🔐 Verifying token for project: {}", firebase_project_id);
 
     // 1️⃣ Fetch Firebase public keys
@@ -75,27 +65,4 @@ pub async fn verify_firebase_token(id_token: &str) -> Result<(String, String, Op
     // Ok(token_data.claims.sub) // ✅ Firebase UID (unique user id)
 }
 
-
-/// Load environment variables from .env file in project root
-fn load_env_from_root() {
-    // Try multiple possible locations for the .env file
-    let possible_paths = [
-        ".env",
-        "./.env",
-        "../.env",
-        "../../.env",
-    ];
-    
-    for path in &possible_paths {
-        if Path::new(path).exists() {
-            println!("📁 Loading .env from: {}", path);
-            if dotenv::from_filename(path).is_ok() {
-                println!("✅ Successfully loaded .env from: {}", path);
-                return;
-            }
-        }
-    }
-    
-    println!("⚠️  No .env file found, using existing environment variables");
-}
 

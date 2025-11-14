@@ -1,44 +1,25 @@
 use tauri::command;
 use crate::db::schemas::ClipboardEntry;
 use crate::auth::verify_firebase_token;
-use crate::db::database::create_db_pool;
 use crate::db::users_repository::UsersRepository;
 use crate::db::schemas::users::{NewUser, UserResponse, PurgeCadence};
 use crate::db::schemas::tags::{Tag, NewTag, UpdateTag, TagResponse};
 use crate::db::tags_repository::TagRepository;
 use rand::Rng;
 use serde_json;
-use tauri::{State, Manager};
+use tauri::{State};
 use sqlx::PgPool;
 use tauri_plugin_updater::UpdaterExt;
 use std::time::Duration;
-use tauri::Emitter;
 use tauri::AppHandle;
 use tauri::async_runtime::Mutex;
 use crate::updater::{Updater, UpdateCheckResult, InstallerInfo};
 use crate::db::database::ClipboardRepository;
-use crate::session::get_current_session;
+// use crate::session::get_current_session;
+use crate::config::{get_github_owner, get_github_repo, get_current_version};
 
-#[tauri::command]
-pub async fn debug_get_specific_fields() -> serde_json::Value {
-    serde_json::json!({
-        "user_id": crate::session::get_current_user_id(),
-        "organization_id": crate::session::get_current_organization_id(),
-        "email": crate::session::get_current_user_email(),
-        "is_logged_in": crate::session::is_user_logged_in()
-    })
-}
 
-// ALL commands should use the managed pool state
-#[command]
-pub async fn get_all_entries(
-    limit: Option<i64>,
-    pool: tauri::State<'_, sqlx::PgPool>
-) -> Result<Vec<ClipboardEntry>, String> {
-    ClipboardRepository::get_all(&pool, limit)
-        .await
-        .map_err(|e| e.to_string())
-}
+
 
 #[command]
 pub async fn get_my_entries(
@@ -215,7 +196,6 @@ pub async fn signup_user(
     println!("✅ Firebase UID verified: {}", uid);
     println!("📧 User email: {}", email);
 
-    // ✅ Check if user already exists (using managed pool)
     if let Some(existing_user) = UsersRepository::get_by_firebase_uid(&pool, &uid)
         .await
         .map_err(|e| e.to_string())?
@@ -224,7 +204,6 @@ pub async fn signup_user(
         return Err("User already exists. Please login instead.".to_string());
     }
 
-    // ✅ Create new user (using managed pool)
     let new_user = NewUser {
         firebase_uid: uid.clone(),
         email: email.clone(),
@@ -520,8 +499,7 @@ pub async fn assign_tag_to_entry(
     tag_name: String,
     pool: tauri::State<'_, sqlx::PgPool>
 ) -> Result<ClipboardEntry, String> {
-    let organization_id = crate::session::get_current_organization_id()
-        .ok_or("User not logged in".to_string())?;
+    
 
     println!("🟢 Assigning tag '{}' to entry {}", tag_name, clipboard_entry_id);
     
@@ -536,11 +514,8 @@ pub async fn remove_tag_from_entry(
     tag_name: String,
     pool: tauri::State<'_, sqlx::PgPool>
 ) -> Result<ClipboardEntry, String> {
-    let organization_id = crate::session::get_current_organization_id()
-        .ok_or("User not logged in".to_string())?;
-
-    println!("🔴 Removing tag '{}' from entry {}", tag_name, clipboard_entry_id);
     
+    println!("🔴 Removing tag '{}' from entry {}", tag_name, clipboard_entry_id);    
     // No need for explicit type annotation now
     ClipboardRepository::remove_tag(&pool, clipboard_entry_id, &tag_name)
         .await
@@ -756,15 +731,23 @@ pub async fn check_and_install_update_silently(app: &tauri::AppHandle) -> Result
 
 #[tauri::command]
 pub async fn check_for_updates(_app_handle: AppHandle) -> Result<UpdateCheckResult, String> {
-    // Replace with your actual GitHub info
-    let updater = Updater::new("Shivanshudeveloper", "clipboard_updates", "0.2.4");
+    
+let updater = Updater::new(
+    get_github_owner(), 
+    get_github_repo(), 
+    get_current_version()
+);
     let result = updater.check_for_updates().await;
     Ok(result)
 }
 
 #[tauri::command]
 pub async fn install_update(app_handle: AppHandle, download_url: String) -> Result<(), String> {
-    let updater = Updater::new("Shivanshudeveloper", "clipboard_updates", "0.2.4");
+let updater = Updater::new(
+    get_github_owner(), 
+    get_github_repo(), 
+    get_current_version()
+);
     updater.download_and_install(download_url, app_handle).await
 }
 
@@ -776,9 +759,12 @@ pub async fn download_update(
     updater_state: State<'_, Mutex<Option<Updater>>>,
 ) -> Result<InstallerInfo, String> {
     let mut updater_guard = updater_state.lock().await;
+     let github_owner = get_github_owner();
+    let github_repo = get_github_repo();
+    let current_version = get_current_version();
     
     if updater_guard.is_none() {
-        *updater_guard = Some(Updater::new("Shivanshudeveloper", "clipboard_updates", "0.2.4"));
+        *updater_guard = Some(Updater::new(github_owner, github_repo, current_version));
     }
     
     if let Some(updater) = updater_guard.as_mut() {
@@ -794,6 +780,7 @@ pub async fn install_downloaded_update(
     updater_state: State<'_, Mutex<Option<Updater>>>,
 ) -> Result<(), String> {
     let updater_guard = updater_state.lock().await;
+
     
     if let Some(updater) = updater_guard.as_ref() {
         updater.install_downloaded_update(installer_info).await
@@ -818,13 +805,24 @@ pub async fn cancel_update(
 
 #[tauri::command]
 pub async fn auto_update(app_handle: AppHandle) -> Result<bool, String> {
-    let mut updater = Updater::new("Shivanshudeveloper", "clipboard_updates", "0.2.4");
+    let mut updater = Updater::new(
+        get_github_owner(), 
+        get_github_repo(), 
+        get_current_version()
+    );
+
     updater.auto_update(app_handle).await
 }
 
 #[tauri::command]
 pub async fn check_and_notify_updates(app_handle: AppHandle) -> Result<(), String> {
-    let updater = Updater::new("Shivanshudeveloper", "clipboard_updates", "0.2.4");
+
+    let current_version = get_current_version();
+let updater = Updater::new(
+    get_github_owner(), 
+    get_github_repo(), 
+    get_current_version()
+);
     updater.check_and_notify(app_handle).await;
     Ok(())
 }

@@ -16,6 +16,14 @@ export default function SignupPage() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [agreeToTerms, setAgreeToTerms] = useState(false);
+  const [errors, setErrors] = useState({
+    fullName: "",
+    email: "",
+    password: "",
+    confirmPassword: "",
+    terms: "",
+    general: ""
+  });
   
   const navigate = useNavigate();
 
@@ -29,23 +37,61 @@ export default function SignupPage() {
     }
   }, [navigate]);
 
+  const clearErrors = () => {
+    setErrors({
+      fullName: "",
+      email: "",
+      password: "",
+      confirmPassword: "",
+      terms: "",
+      general: ""
+    });
+  };
+
   const handleEmailSignup = async (e) => {
     e.preventDefault();
     console.log("🖱️ Email signup button clicked");
     
-    if (!fullName || !email || !password || !confirmPassword) {
-      console.log("❌ Form validation failed - missing fields");
-      alert("Please fill in all fields");
-      return;
+    clearErrors();
+    
+    // Validation
+    let hasErrors = false;
+    const newErrors = {
+      fullName: "",
+      email: "",
+      password: "",
+      confirmPassword: "",
+      terms: "",
+      general: ""
+    };
+
+    if (!fullName) {
+      newErrors.fullName = "Full name is required";
+      hasErrors = true;
     }
-    if (password !== confirmPassword) {
-      console.log("❌ Passwords don't match");
-      alert("Passwords don't match!");
-      return;
+    if (!email) {
+      newErrors.email = "Email is required";
+      hasErrors = true;
+    }
+    if (!password) {
+      newErrors.password = "Password is required";
+      hasErrors = true;
+    }
+    if (!confirmPassword) {
+      newErrors.confirmPassword = "Please confirm your password";
+      hasErrors = true;
+    }
+    if (password && confirmPassword && password !== confirmPassword) {
+      newErrors.confirmPassword = "Passwords don't match";
+      hasErrors = true;
     }
     if (!agreeToTerms) {
-      console.log("❌ Terms not agreed");
-      alert("Please agree to the Terms of Service and Privacy Policy");
+      newErrors.terms = "Please agree to the Terms of Service and Privacy Policy";
+      hasErrors = true;
+    }
+
+    if (hasErrors) {
+      setErrors(newErrors);
       return;
     }
     
@@ -83,7 +129,6 @@ export default function SignupPage() {
       
       console.log("✅ Backend user creation successful");
       
-      
       // Step 6: Store user data locally (include organizationId)
       const userData = {
         uid: user.uid,
@@ -107,21 +152,20 @@ export default function SignupPage() {
       console.error("❌ Error message:", error.message);
       
       // Handle specific Firebase errors
+      let errorMessage = "Signup failed. Please try again.";
+      
       if (error.code === 'auth/email-already-in-use') {
-        alert("This email is already registered. Please use a different email or sign in.");
+        setErrors({ ...errors, email: "This email is already registered. Please use a different email or sign in." });
       } else if (error.code === 'auth/weak-password') {
-        alert("Password is too weak. Please use a stronger password.");
+        setErrors({ ...errors, password: "Password is too weak. Please use a stronger password." });
       } else if (error.code === 'auth/invalid-email') {
-        alert("Invalid email address. Please check your email.");
+        setErrors({ ...errors, email: "Invalid email address. Please check your email." });
       } else if (error.code === 'auth/operation-not-allowed') {
-        alert("Email/password sign-up is not enabled. Please contact support.");
+        setErrors({ ...errors, general: "Email/password sign-up is not enabled. Please contact support." });
+      } else if (error.toString().includes("User already exists")) {
+        setErrors({ ...errors, email: "User already exists. Please login instead." });
       } else {
-        // Handle backend errors (like user already exists in our database)
-        if (error.toString().includes("User already exists")) {
-          alert("User already exists. Please login instead.");
-        } else {
-          alert("Signup failed. Please try again.");
-        }
+        setErrors({ ...errors, general: errorMessage });
       }
     } finally {
       setIsLoading(false);
@@ -143,7 +187,7 @@ export default function SignupPage() {
       console.log("✅ Redirecting to Google signup...");
     } catch (error) {
       console.error("❌ Google Signup Failed:", error);
-      alert("Google signup failed. Please try again.");
+      setErrors({ ...errors, general: "Google signup failed. Please try again." });
     }
   };
 
@@ -164,6 +208,18 @@ export default function SignupPage() {
 
       {/* Form */}
       <div className="flex-1 p-6 pt-4">
+        {/* General Error Message */}
+        {errors.general && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+            <div className="text-xs text-red-500 flex items-center">
+              <svg className="w-3 h-3 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+              </svg>
+              {errors.general}
+            </div>
+          </div>
+        )}
+
         <form onSubmit={handleEmailSignup} className="space-y-4">
           {/* Full Name Field */}
           <div>
@@ -175,12 +231,25 @@ export default function SignupPage() {
               <input
                 type="text"
                 value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                className="w-full h-10 pl-10 pr-3 border border-gray-300 rounded-lg bg-white text-gray-800 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                onChange={(e) => {
+                  setFullName(e.target.value);
+                  if (errors.fullName) clearErrors();
+                }}
+                className={`w-full h-10 pl-10 pr-3 border rounded-lg bg-white text-gray-800 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                  errors.fullName ? 'border-red-300' : 'border-gray-300'
+                }`}
                 placeholder="Enter your full name"
                 required
               />
             </div>
+            {errors.fullName && (
+              <div className="mt-1 text-xs text-red-500 flex items-center">
+                <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                </svg>
+                {errors.fullName}
+              </div>
+            )}
           </div>
 
           {/* Email Field */}
@@ -193,12 +262,25 @@ export default function SignupPage() {
               <input
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full h-10 pl-10 pr-3 border border-gray-300 rounded-lg bg-white text-gray-800 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (errors.email) clearErrors();
+                }}
+                className={`w-full h-10 pl-10 pr-3 border rounded-lg bg-white text-gray-800 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                  errors.email ? 'border-red-300' : 'border-gray-300'
+                }`}
                 placeholder="Enter your email"
                 required
               />
             </div>
+            {errors.email && (
+              <div className="mt-1 text-xs text-red-500 flex items-center">
+                <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                </svg>
+                {errors.email}
+              </div>
+            )}
           </div>
 
           {/* Password Fields */}
@@ -211,8 +293,13 @@ export default function SignupPage() {
               <input
                 type={showPassword ? "text" : "password"}
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full h-10 pl-10 pr-10 border border-gray-300 rounded-lg bg-white text-gray-800 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  if (errors.password || errors.confirmPassword) clearErrors();
+                }}
+                className={`w-full h-10 pl-10 pr-10 border rounded-lg bg-white text-gray-800 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                  errors.password ? 'border-red-300' : 'border-gray-300'
+                }`}
                 placeholder="Create a password"
                 required
                 minLength={6}
@@ -225,6 +312,14 @@ export default function SignupPage() {
                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
+            {errors.password && (
+              <div className="mt-1 text-xs text-red-500 flex items-center">
+                <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                </svg>
+                {errors.password}
+              </div>
+            )}
           </div>
 
           <div>
@@ -236,8 +331,13 @@ export default function SignupPage() {
               <input
                 type={showConfirmPassword ? "text" : "password"}
                 value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full h-10 pl-10 pr-10 border border-gray-300 rounded-lg bg-white text-gray-800 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value);
+                  if (errors.confirmPassword) clearErrors();
+                }}
+                className={`w-full h-10 pl-10 pr-10 border rounded-lg bg-white text-gray-800 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                  errors.confirmPassword ? 'border-red-300' : 'border-gray-300'
+                }`}
                 placeholder="Confirm your password"
                 required
                 minLength={6}
@@ -250,6 +350,14 @@ export default function SignupPage() {
                 {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
+            {errors.confirmPassword && (
+              <div className="mt-1 text-xs text-red-500 flex items-center">
+                <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                </svg>
+                {errors.confirmPassword}
+              </div>
+            )}
           </div>
 
           {/* Terms Agreement */}
@@ -257,8 +365,13 @@ export default function SignupPage() {
             <input
               type="checkbox"
               checked={agreeToTerms}
-              onChange={(e) => setAgreeToTerms(e.target.checked)}
-              className="w-3 h-3 mt-0.5 text-blue-500 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
+              onChange={(e) => {
+                setAgreeToTerms(e.target.checked);
+                if (errors.terms) clearErrors();
+              }}
+              className={`w-3 h-3 mt-0.5 text-blue-500 bg-gray-100 border rounded focus:ring-blue-500 ${
+                errors.terms ? 'border-red-300' : 'border-gray-300'
+              }`}
             />
             <label className="text-gray-700">
               I agree to the{" "}
@@ -271,6 +384,14 @@ export default function SignupPage() {
               </button>
             </label>
           </div>
+          {errors.terms && (
+            <div className="text-xs text-red-500 flex items-center">
+              <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+              </svg>
+              {errors.terms}
+            </div>
+          )}
 
           {/* Submit Button */}
           <button

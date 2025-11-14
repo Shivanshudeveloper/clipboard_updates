@@ -380,12 +380,7 @@ impl Updater {
     
     println!("🎯 Update available: {} -> {}", update_result.current_version, update_result.latest_version);
     
-    // CRITICAL: Check if we're already trying to update to avoid loops
-    if update_result.current_version == "0.2.4" && update_result.latest_version == "0.2.4" {
-        println!("🔄 Already on version 0.2.4 - stopping update loop");
-        return Ok(false);
-    }
-    
+   
     let download_url = if !update_result.download_url.is_empty() {
         update_result.download_url
     } else {

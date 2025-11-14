@@ -31,7 +31,19 @@ const ClipTraySettings = () => {
   useEffect(() => {
     checkForUpdatesOnStart();
     setupEventListeners();
+    // enableAutoStart(); 
   }, []);
+
+  // // Enable auto-start on app load
+  // const enableAutoStart = async () => {
+  //   try {
+  //     await invoke('enable_auto_start');
+  //     console.log('✅ Auto-start enabled by default');
+  //     setStartAtLogin(true);
+  //   } catch (error) {
+  //     console.error('Failed to enable auto-start:', error);
+  //   }
+  // };
 
   const setupEventListeners = async () => {
     try {
@@ -226,15 +238,38 @@ const ClipTraySettings = () => {
       <hr className="border-none border-t border-gray-300 my-2.5 mb-3.5" />
 
       {activeTab === "General" && (
-        <GeneralSettings
-          startAtLogin={startAtLogin}
-          setStartAtLogin={setStartAtLogin}
-          autoPurgeUnpinned={autoPurgeUnpinned}
-          setAutoPurgeUnpinned={setAutoPurgeUnpinned}
-          purgeCadence={purgeCadence}
-          setPurgeCadence={setPurgeCadence}
-          purgeAllUnpinned={purgeAllUnpinned}
-        />
+        <div className="space-y-4 overflow-y-auto flex-1 pr-2">
+          {/* Auto-start Status Display (No Toggle) */}
+          {/* <div className="bg-white p-4 rounded-lg border border-gray-200">
+            <h3 className="font-semibold text-gray-800 mb-3">Startup Settings</h3>
+            
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Start automatically when Windows starts
+                </label>
+                <p className="text-xs text-gray-500">
+                  ClipTray is configured to start automatically when you log into Windows
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
+                <span className="text-sm text-green-600 font-medium">Enabled</span>
+              </div>
+            </div>
+          </div> */}
+
+          {/* Rest of General Settings */}
+          <GeneralSettings
+            startAtLogin={startAtLogin}
+            setStartAtLogin={setStartAtLogin}
+            autoPurgeUnpinned={autoPurgeUnpinned}
+            setAutoPurgeUnpinned={setAutoPurgeUnpinned}
+            purgeCadence={purgeCadence}
+            setPurgeCadence={setPurgeCadence}
+            purgeAllUnpinned={purgeAllUnpinned}
+          />
+        </div>
       )}
 
       {activeTab === "Tags" && (

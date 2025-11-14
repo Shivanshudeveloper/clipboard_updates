@@ -6,7 +6,6 @@ use tauri::AppHandle;
 use tauri::Emitter;
 use serde::Serialize;
 use crate::db::{ClipboardRepository, NewClipboardEntry};
-use sqlx::PgPool;
 
 // Configuration
 const POLL_INTERVAL_MS: u64 = 1000;

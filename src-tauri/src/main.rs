@@ -17,10 +17,12 @@ use tauri_utils::config::WebviewUrl;
 use std::time::Duration;
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use tauri_plugin_autostart::{MacosLauncher};
+
 use command::setup_silent_auto_updater;
+
 use command::{
     // Core clipboard operations
-    get_all_entries,
     get_recent_entries,
     get_entry_by_id,
     get_my_entries,
@@ -66,6 +68,9 @@ use command::{
 use tauri::async_runtime::Mutex;
 use crate::updater::Updater;
 use crate::commands::clipboard::start_clipboard_monitoring;
+mod config;
+
+use crate::config::{get_github_owner, get_github_repo, get_current_version};
 
 use crate::db::database::{create_db_pool};
 
@@ -95,11 +100,27 @@ async fn main() {
     println!("🚀 Starting ClipTray v{}...", env!("CARGO_PKG_VERSION"));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec!["--silent"]), // Always start silently
+        ))
         .manage(AppState::default())
         .manage(Mutex::new(Option::<Updater>::None))
         .setup(move |app| {
             let app_handle = app.handle().clone();
+
+            enable_auto_start_silent();
+
+            let was_auto_started = std::env::args().any(|arg| arg == "--silent");
             
+            if was_auto_started {
+                println!("🚀 Application auto-started on boot");
+                // Auto-start specific behavior can go here
+            } else {
+                println!("👤 Application started manually by user");
+            }
+
+            println!("✅ Auto-start configured");
             // ✅ Start UI immediately, database initializes in background
             setup_tray_and_ui(app)?;
             
@@ -113,7 +134,6 @@ async fn main() {
         .invoke_handler(tauri::generate_handler![
             // Entry operations
             get_my_entries,
-            get_all_entries,
             get_recent_entries,
             get_entry_by_id,
             delete_entry,
@@ -154,7 +174,10 @@ async fn main() {
             auto_update,
             check_for_updates,
             check_and_notify_updates,
-            
+
+            //autostart
+            enable_auto_start,
+    
             // Window management
             resize_window,
             
@@ -179,7 +202,50 @@ async fn main() {
         .expect("❌ Error while running Tauri application");
 }
 
-/// ✅ Non-blocking application initialization
+#[tauri::command]
+async fn enable_auto_start() -> Result<bool, String> {
+    use std::process::Command;
+    
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed to get executable path: {}", e))?;
+    
+    let exe_path_str = exe_path.to_str().unwrap();
+    
+    // Create a registry entry for auto-start in HKCU (Current User)
+    let output = Command::new("cmd")
+        .args(&["/C", "reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "ClipTray", "/t", "REG_SZ", "/d", &format!("\"{}\" --silent", exe_path_str), "/f"])
+        .output()
+        .map_err(|e| format!("Failed to execute reg command: {}", e))?;
+    
+    if output.status.success() {
+        println!("✅ Auto-start enabled via Windows Registry");
+        Ok(true)
+    } else {
+        let error_msg = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Failed to enable auto-start: {}", error_msg))
+    }
+}
+
+
+
+/// ✅ Enable auto-start silently without any user interaction
+fn enable_auto_start_silent() {
+    use std::process::Command;
+    
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_path_str) = exe_path.to_str() {
+            let _ = Command::new("cmd")
+                .args(&["/C", "reg", "add", 
+                       "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", 
+                       "/v", "ClipTray", 
+                       "/t", "REG_SZ", 
+                       "/d", &format!("\"{}\" --silent", exe_path_str), 
+                       "/f"])
+                .output();
+        }
+    }
+}
+
 async fn initialize_application_async(app_handle: tauri::AppHandle) {
     println!("🔄 Starting background initialization...");
     
@@ -280,6 +346,9 @@ async fn wait_for_database_ready(app_handle: &tauri::AppHandle, timeout: Duratio
 /// ✅ Schedule update checks with proper delays
 async fn schedule_update_checks(app_handle: tauri::AppHandle) {
     // Clone app_handle for the first task
+     let github_owner = get_github_owner();
+    let github_repo = get_github_repo();
+    let current_version = get_current_version();
     let app_handle_1 = app_handle.clone();
     
     // Initial update check after app is stable
@@ -287,7 +356,7 @@ async fn schedule_update_checks(app_handle: tauri::AppHandle) {
         tokio::time::sleep(Duration::from_secs(15)).await;
         
         println!("🔍 Performing automatic update check...");
-        let updater = Updater::new("Shivanshudeveloper", "clipboard_updates", "0.2.4");
+        let updater = Updater::new(github_owner, github_repo, current_version);
         updater.check_and_notify(app_handle_1).await;
     });
     
@@ -299,7 +368,7 @@ async fn schedule_update_checks(app_handle: tauri::AppHandle) {
         tokio::time::sleep(Duration::from_secs(45)).await;
         
         println!("🔄 Attempting automatic update...");
-        let mut updater = Updater::new("Shivanshudeveloper", "clipboard_updates", "0.2.4");
+        let mut updater = Updater::new(github_owner, github_repo, current_version);
         match updater.auto_update(app_handle_2).await {
             Ok(true) => println!("✅ Auto-update completed successfully"),
             Ok(false) => println!("✅ No updates available for auto-update"),

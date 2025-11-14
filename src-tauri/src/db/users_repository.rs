@@ -1,7 +1,6 @@
 use crate::db::schemas::users::{User, NewUser, UpdateUser, UserResponse, PurgeCadence};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool};
 use chrono::Utc;
-use serde_json::Value;
 
 pub struct UsersRepository;
 

@@ -1,7 +1,7 @@
 // src/db/tags_repository.rs
 use sqlx::{Error, Pool, Postgres, Row};
 use crate::db::schemas::tags::{Tag, NewTag, UpdateTag, TagStats};
-use chrono::{DateTime, Utc};
+use chrono::{Utc};
 
 pub struct TagRepository {
     pool: Pool<Postgres>,
