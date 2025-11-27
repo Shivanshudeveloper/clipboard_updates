@@ -1,0 +1,11 @@
+{
+  "version": "0.2.2",
+  "notes": "Auto-update release",
+  "pub_date": "2024-01-15T12:00:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk2RkVCQjdDNjg4RTU0OTgKUldTWVZJNW9mTHYrbHZ0SWV1WnVPSEMrTXY5L3VaQXZuS1FXdFkwOGZFbVd5bGdUd2FPa2VocncK",
+      "url": "https://github.com/Shivanshudeveloper/clipboard_updates/releases/download/v0.2.2/cliptray_0.2.2_x64-setup.exe"
+    }
+  }
+}

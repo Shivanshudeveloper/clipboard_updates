@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "cliptray",
+  "version": "0.2.5",
+  "identifier": "com.kisha.cliptray",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": []
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.icns",
+      "icons/icon.png"
+    ]
+  },
+  "plugins": {
+  "window": {
+    "close": true,
+    "hide": true,
+    "show": true,
+    "maximize": true,
+    "minimize": true,
+    "unmaximize": true,
+    "unminimize": true,
+    "startDragging": true
+  },
+  "opener": {
+    "requireLiteralLeadingDot": false
+  },
+  "updater": {
+    "active": true,
+    "dialog": true,
+    "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk2RkVCQjdDNjg4RTU0OTgKUldTWVZJNW9mTHYrbHZ0SWV1WnVPSEMrTXY5L3VaQXZuS1FXdFkwOGZFbVd5bGdUd2FPa2VocncK",
+    "endpoints": [
+      "https://api.github.com/repos/Shivanshudeveloper/clipboard_updates/releases/latest"
+    ]
+  }
+}
+}
