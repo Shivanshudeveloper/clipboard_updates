@@ -138,7 +138,7 @@ export default function ClipTray() {
     const loadEntries = async () => {
       try {
         console.log("📥 Loading clipboard entries...");
-        const data = await getClipboardEntries(100);
+        const data = await getClipboardEntries(2000);
         if (Array.isArray(data)) {
           console.log(`✅ Loaded ${data.length} entries`);
           setLocalItems(data);
@@ -427,7 +427,7 @@ const openContextMenu = (itemId, rect) => {
 
   const refreshClipboardData = async () => {
     try {
-      const data = await getClipboardEntries(100);
+      const data = await getClipboardEntries(200);
       if (Array.isArray(data)) {
         setLocalItems(data);
       }

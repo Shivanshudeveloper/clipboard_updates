@@ -90,6 +90,8 @@ use crate::config::{get_github_owner, get_github_repo, get_current_version};
 use crate::db::database::create_db_pool;
 use crate::db::sqlite_database::create_sqlite_pool;
 use crate::db::sqlite_database::SqliteClipboardRepository;
+use crate::session::{set_current_user, get_current_user_id, get_current_organization_id, get_current_user_email, get_current_session, clear_current_user, is_user_logged_in};
+
 
 // 🔁 Use Tauri's async runtime for spawn + Mutex
 use tauri::async_runtime::{self, Mutex};
@@ -285,6 +287,8 @@ fn enable_auto_start_silent() {
 async fn initialize_application_async(app_handle: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     println!("🔄 Starting background initialization...");
 
+    // test_user_session_functions();
+
     // Step 1: Initialize database (SQLite + optional Postgres)
     if let Err(e) = initialize_database_async(&app_handle).await {
         eprintln!("❌ Database initialization failed: {}", e);
@@ -311,6 +315,49 @@ async fn initialize_application_async(app_handle: tauri::AppHandle) -> Result<()
 
     println!("✅ Background initialization completed");
     Ok(())
+}
+
+fn test_user_session_functions() {
+    // Test setting the user session
+    set_current_user("user123".to_string(), "org123".to_string(), "user@example.com".to_string());
+    
+    // Test getting the current user ID
+    if let Some(user_id) = get_current_user_id() {
+        println!("✅ User ID: {}", user_id);
+    } else {
+        println!("❌ No user ID found");
+    }
+
+    // Test getting the current organization ID
+    if let Some(org_id) = get_current_organization_id() {
+        println!("✅ Organization ID: {}", org_id);
+    } else {
+        println!("❌ No organization ID found");
+    }
+
+    // Test getting the current user email
+    if let Some(email) = get_current_user_email() {
+        println!("✅ User email: {}", email);
+    } else {
+        println!("❌ No user email found");
+    }
+
+    // Test getting the current session
+    if let Some(session) = get_current_session() {
+        println!("✅ Current session: {:?}", session);
+    } else {
+        println!("❌ No session found");
+    }
+
+    // Test clearing the current user session
+    clear_current_user();
+
+    // Test if the user is logged in after clearing the session
+    if is_user_logged_in() {
+        println!("✅ User is logged in");
+    } else {
+        println!("❌ User is not logged in");
+    }
 }
 
 /// ✅ Async database initialization with offline fallback

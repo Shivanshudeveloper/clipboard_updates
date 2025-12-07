@@ -8,7 +8,7 @@ export const useClipboardDB = () => {
   const [initialLoad, setInitialLoad] = useState(true);
 
   // Get all clipboard entries
-  const getClipboardEntries = useCallback(async (limit = 100) => {
+  const getClipboardEntries = useCallback(async (limit = 5000) => {
     setLoading(true);
     setError(null);
     try {
