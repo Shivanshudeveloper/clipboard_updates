@@ -144,6 +144,7 @@ export default function SignupPage() {
       
       // Step 7: Navigate to home
       console.log("🔄 Navigating to /home...");
+      window.location.reload();
       navigate("/home", { replace: true });
       
     } catch (error) {

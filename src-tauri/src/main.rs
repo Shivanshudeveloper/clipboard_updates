@@ -17,10 +17,11 @@ use tauri_utils::config::WebviewUrl;
 use std::time::Duration;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri_plugin_autostart::{MacosLauncher};
+use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_store::Builder as StoreBuilder;
 use winreg::enums::*;
 use winreg::RegKey;
+use tokio::time;
 
 use command::setup_silent_auto_updater;
 
@@ -33,9 +34,10 @@ use command::{
     update_entry,
     update_entry_content,
     search_entries,
-    
+
     // Organization & tagging
     get_organization_tags,
+    get_tags,
     create_tag,
     update_tag,
     delete_tag,
@@ -43,7 +45,6 @@ use command::{
     assign_tag_to_entry,
     remove_tag_from_entry,
 
-    
     // Data management
     purge_unpinned_entries,
     purge_untagged_entries,
@@ -54,7 +55,9 @@ use command::{
     update_purge_cadence,
     update_auto_purge_settings,
     update_retain_tags_setting,
-    
+    get_current_user_retain_tags,
+    run_auto_purge_now,
+
     // User management
     login_user,
     logout_user,
@@ -64,7 +67,7 @@ use command::{
     google_login,
     debug_session_state,
     get_current_user,
-   
+
     // Application updates
     install_update,
     download_update,
@@ -73,16 +76,23 @@ use command::{
     auto_update,
     check_and_notify_updates,
     check_for_updates,
+    sync_clipboard_to_cloud,
+    bootstrap_cloud_now,
 };
-use tauri::async_runtime::Mutex;
+
 use crate::updater::Updater;
 use crate::commands::clipboard::start_clipboard_monitoring;
 mod config;
 mod google_oauth;
+use sqlx::{PgPool, SqlitePool};
 
 use crate::config::{get_github_owner, get_github_repo, get_current_version};
+use crate::db::database::create_db_pool;
+use crate::db::sqlite_database::create_sqlite_pool;
+use crate::db::sqlite_database::SqliteClipboardRepository;
 
-use crate::db::database::{create_db_pool};
+// 🔁 Use Tauri's async runtime for spawn + Mutex
+use tauri::async_runtime::{self, Mutex};
 
 // Application configuration
 const POP_W: f64 = 460.0;
@@ -96,6 +106,12 @@ pub struct AppState {
     pub is_clipboard_monitoring: AtomicBool,
 }
 
+#[derive(Debug)]
+pub struct DbPools {
+    pub pg: Option<PgPool>,
+    pub sqlite: SqlitePool,
+}
+
 impl Default for AppState {
     fn default() -> Self {
         Self {
@@ -105,8 +121,7 @@ impl Default for AppState {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     println!("🚀 Starting ClipTray v{}...", env!("CARGO_PKG_VERSION"));
 
     tauri::Builder::default()
@@ -114,31 +129,33 @@ async fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
-            Some(vec!["--silent"]), // Always start silently
+            None
         ))
         .manage(AppState::default())
         .manage(Mutex::new(Option::<Updater>::None))
-        .setup(move |app| {
+        .setup(|app| {
             let app_handle = app.handle().clone();
 
             enable_auto_start_silent();
 
             let was_auto_started = std::env::args().any(|arg| arg == "--silent");
-            
+
             if was_auto_started {
                 println!("🚀 Application auto-started on boot");
-                // Auto-start specific behavior can go here
             } else {
                 println!("👤 Application started manually by user");
             }
 
             println!("✅ Auto-start configured");
-            // ✅ Start UI immediately, database initializes in background
+
+            // ✅ Setup tray + UI immediately
             setup_tray_and_ui(app)?;
-            
-            // ✅ Non-blocking background initialization
-            tokio::spawn(async move {
-                initialize_application_async(app_handle).await;
+
+            // ✅ Background initialization on Tauri's async runtime
+            async_runtime::spawn(async move {
+                if let Err(e) = initialize_application_async(app_handle.clone()).await {
+                    eprintln!("❌ Background initialization failed: {}", e);
+                }
             });
 
             Ok(())
@@ -152,16 +169,17 @@ async fn main() {
             update_entry,
             update_entry_content,
             search_entries,
-            
+
             // Tag operations
             get_organization_tags,
+            get_tags,
             create_tag,
             update_tag,
             delete_tag,
             get_tag_stats,
             assign_tag_to_entry,
             remove_tag_from_entry,
-            
+
             // Purge operations
             purge_entries_older_than,
             purge_unpinned_entries,
@@ -171,8 +189,10 @@ async fn main() {
             get_current_purge_settings,
             update_purge_cadence,
             update_auto_purge_settings,
+            get_current_user_retain_tags,
             update_retain_tags_setting,
-            
+            run_auto_purge_now,
+
             // User authentication
             login_user,
             logout_user,
@@ -182,7 +202,6 @@ async fn main() {
             debug_session_state,
             get_current_user,
             restore_session,
-           
 
             // Update operations
             install_update,
@@ -193,17 +212,18 @@ async fn main() {
             check_for_updates,
             check_and_notify_updates,
 
-            //autostart
+            // Autostart
             enable_auto_start,
-    
+
             // Window management
             resize_window,
-            
-            // External commands
+
             commands::editor::open_in_notepad_and_wait,
-            
-            // Database status check
+
+            // Database status + sync
             check_database_status,
+            sync_clipboard_to_cloud,
+            bootstrap_cloud_now,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -220,48 +240,7 @@ async fn main() {
         .expect("❌ Error while running Tauri application");
 }
 
-// #[tauri::command]
-// async fn enable_auto_start() -> Result<bool, String> {
-//     use std::process::Command;
-    
-//     let exe_path = std::env::current_exe()
-//         .map_err(|e| format!("Failed to get executable path: {}", e))?;
-    
-//     let exe_path_str = exe_path.to_str().unwrap();
-    
-//     // Create a registry entry for auto-start in HKCU (Current User)
-//     let output = Command::new("cmd")
-//         .args(&["/C", "reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "ClipTray", "/t", "REG_SZ", "/d", &format!("\"{}\" --silent", exe_path_str), "/f"])
-//         .output()
-//         .map_err(|e| format!("Failed to execute reg command: {}", e))?;
-    
-//     if output.status.success() {
-//         println!("✅ Auto-start enabled via Windows Registry");
-//         Ok(true)
-//     } else {
-//         let error_msg = String::from_utf8_lossy(&output.stderr);
-//         Err(format!("Failed to enable auto-start: {}", error_msg))
-//     }
-// }
-
-// /// ✅ Enable auto-start silently without any user interaction
-// fn enable_auto_start_silent() {
-//     use std::process::Command;
-    
-//     if let Ok(exe_path) = std::env::current_exe() {
-//         if let Some(exe_path_str) = exe_path.to_str() {
-//             let _ = Command::new("cmd")
-//                 .args(&["/C", "reg", "add", 
-//                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", 
-//                        "/v", "ClipTray", 
-//                        "/t", "REG_SZ", 
-//                        "/d", &format!("\"{}\" --silent", exe_path_str), 
-//                        "/f"])
-//                 .output();
-//         }
-//     }
-// }
-
+// === AUTOSTART ===
 
 fn set_autostart_registry() -> Result<(), String> {
     use std::env;
@@ -273,20 +252,19 @@ fn set_autostart_registry() -> Result<(), String> {
         .to_str()
         .ok_or_else(|| "Invalid executable path (non-UTF8)".to_string())?;
 
-    // Open HKCU\Software\Microsoft\Windows\CurrentVersion\Run
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu
         .create_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
         .map_err(|e| format!("Failed to open registry key: {}", e))?;
 
-    // Value: "C:\path\to\cliptray.exe" --silent
-    let value = format!("\"{}\" --silent", exe_path_str);
+    let value = format!("\"{}\"", exe_path_str); // Removed --silent
 
     key.set_value("ClipTray", &value)
         .map_err(|e| format!("Failed to set registry value: {}", e))?;
 
     Ok(())
 }
+
 
 #[tauri::command]
 fn enable_auto_start() -> Result<bool, String> {
@@ -302,93 +280,183 @@ fn enable_auto_start_silent() {
     }
 }
 
+// === BACKGROUND INITIALIZATION ===
 
-async fn initialize_application_async(app_handle: tauri::AppHandle) {
+async fn initialize_application_async(app_handle: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     println!("🔄 Starting background initialization...");
-    
-    // Step 1: Initialize database
+
+    // Step 1: Initialize database (SQLite + optional Postgres)
     if let Err(e) = initialize_database_async(&app_handle).await {
         eprintln!("❌ Database initialization failed: {}", e);
-        let _ = app_handle.emit("database-status", 
-            serde_json::json!({ "status": "error", "message": e.to_string() }));
-        return;
+        let _ = app_handle.emit(
+            "database-status",
+            serde_json::json!({ "status": "error", "message": e.to_string() }),
+        );
+        return Err(e);
     }
+
     
+
     // Step 2: Start clipboard monitoring
     if let Err(e) = start_clipboard_monitoring_async(&app_handle).await {
         eprintln!("❌ Clipboard monitoring failed to start: {}", e);
-        let _ = app_handle.emit("clipboard-status", 
-            serde_json::json!({ "status": "error", "message": e.to_string() }));
+        let _ = app_handle.emit(
+            "clipboard-status",
+            serde_json::json!({ "status": "error", "message": e.to_string() }),
+        );
     }
-    
+
     // Step 3: Schedule update checks (delayed)
     schedule_update_checks(app_handle).await;
-    
-    println!("✅ Background initialization completed");
-}
 
-/// ✅ Async database initialization
-async fn initialize_database_async(app_handle: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    println!("🔄 Initializing database connection...");
-    
-    let _ = app_handle.emit("database-status", 
-        serde_json::json!({ "status": "connecting", "message": "Connecting to database..." }));
-    
-    // Create database pool
-    let db_pool = create_db_pool().await?;
-    
-    let _ = app_handle.emit("database-status", 
-        serde_json::json!({ "status": "creating_tables", "message": "Setting up database..." }));
-    
-    // Store pool in app state
-    app_handle.manage(db_pool);
-    
-    // Update application state
-    let state: State<'_, AppState> = app_handle.state();
-    state.is_database_ready.store(true, Ordering::SeqCst);
-    
-    let _ = app_handle.emit("database-status", 
-        serde_json::json!({ "status": "ready", "message": "Database connected successfully" }));
-    
-    println!("✅ Database initialized successfully");
+    println!("✅ Background initialization completed");
     Ok(())
 }
 
-/// ✅ Async clipboard monitoring startup
-async fn start_clipboard_monitoring_async(app_handle: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    println!("🔄 Starting clipboard monitoring...");
-    
+/// ✅ Async database initialization with offline fallback
+
+async fn initialize_database_async(
+    app_handle: &tauri::AppHandle,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::db::sqlite_database::create_sqlite_pool;
+    use crate::db::database::create_db_pool;
+
+    println!("🔄 Initializing database connection...");
+
+    let _ = app_handle.emit(
+        "database-status",
+        serde_json::json!({
+            "status": "connecting",
+            "message": "Connecting to database..."
+        }),
+    );
+
+    // 1️⃣ Always init SQLite first (offline-first)
+    let sqlite_pool = create_sqlite_pool().await?;
+
+    let _ = app_handle.emit(
+        "database-status",
+        serde_json::json!({
+            "status": "creating_tables",
+            "message": "Setting up local database..."
+        }),
+    );
+
+    let pg_pool: Option<PgPool> =
+        match time::timeout(Duration::from_secs(30), create_db_pool()).await {
+            Ok(Ok(pool)) => {
+                println!("✅ Connected to Postgres (Neon)");
+                Some(pool)
+            }
+            Ok(Err(e)) => {
+                eprintln!("⚠️ Failed to connect to Postgres, running OFFLINE (SQLite only): {e}");
+                let _ = app_handle.emit(
+                    "database-status",
+                    serde_json::json!({
+                        "status": "offline",
+                        "message": "Cloud sync unavailable, using local clipboard history only"
+                    }),
+                );
+                None
+            }
+            Err(_) => {
+                eprintln!("⚠️ Postgres connection TIMED OUT (3s). Running OFFLINE (SQLite only).");
+                let _ = app_handle.emit(
+                    "database-status",
+                    serde_json::json!({
+                        "status": "offline",
+                        "message": "Cloud sync timed out, using local clipboard history only"
+                    }),
+                );
+                None
+            }
+        };
+
+    // 3️⃣ Store pools in state
+    app_handle.manage(DbPools {
+        pg: pg_pool,
+        sqlite: sqlite_pool,
+    });
+
+    // 4️⃣ Mark DB ready (at least SQLite is OK)
     let state: State<'_, AppState> = app_handle.state();
-    
-    // Wait for database to be ready (with timeout)
-    if !wait_for_database_ready(app_handle, Duration::from_secs(30)).await {
+    state.is_database_ready.store(true, Ordering::SeqCst);
+
+    let _ = app_handle.emit(
+        "database-status",
+        serde_json::json!({
+            "status": "ready",
+            "message": "Local database ready"
+        }),
+    );
+
+    println!("✅ Database initialized (SQLite + optional Postgres)");
+    Ok(())
+}
+
+
+/// ✅ Async clipboard monitoring startup
+async fn start_clipboard_monitoring_async(
+    app_handle: &tauri::AppHandle,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("🔄 Starting clipboard monitoring...");
+
+    let state: State<'_, AppState> = app_handle.state();
+
+    // Wait until DB ready
+    if !wait_for_database_ready(app_handle, Duration::from_secs(5)).await {
         return Err("Database not ready within timeout period".into());
     }
-    
-    let db_pool = app_handle.state::<sqlx::PgPool>();
-    
+
+    // Get Postgres (Option) + SQLite
+    let db_pools: State<'_, DbPools> = app_handle.state();
+    let pg_pool = db_pools.pg.clone(); // Option<PgPool>
+    let sqlite_pool = db_pools.sqlite.clone(); // SqlitePool
+
+    // Mark clipboard monitoring ON
     state.is_clipboard_monitoring.store(true, Ordering::SeqCst);
-    
-    match start_clipboard_monitoring(app_handle.clone(), db_pool.inner().clone()).await {
+
+    // Start actual monitoring
+    let result = start_clipboard_monitoring(
+        app_handle.clone(),
+        pg_pool,
+        sqlite_pool,
+    )
+    .await;
+
+    match result {
         Ok(()) => {
             println!("✅ Clipboard monitoring started successfully");
-            let _ = app_handle.emit("clipboard-status", 
-                serde_json::json!({ "status": "ready", "message": "Clipboard monitoring active" }));
+            let _ = app_handle.emit(
+                "clipboard-status",
+                serde_json::json!({
+                    "status": "ready",
+                    "message": "Clipboard monitoring active"
+                }),
+            );
             Ok(())
         }
         Err(e) => {
             state.is_clipboard_monitoring.store(false, Ordering::SeqCst);
-            let _ = app_handle.emit("clipboard-status", 
-                serde_json::json!({ "status": "error", "message": e.to_string() }));
+            let _ = app_handle.emit(
+                "clipboard-status",
+                serde_json::json!({
+                    "status": "error",
+                    "message": e.to_string()
+                }),
+            );
             Err(e)
         }
     }
 }
 
 /// ✅ Wait for database to be ready with timeout
-async fn wait_for_database_ready(app_handle: &tauri::AppHandle, timeout: Duration) -> bool {
+async fn wait_for_database_ready(
+    app_handle: &tauri::AppHandle,
+    timeout: Duration,
+) -> bool {
     let start = std::time::Instant::now();
-    
+
     while start.elapsed() < timeout {
         let state: State<'_, AppState> = app_handle.state();
         if state.is_database_ready.load(Ordering::SeqCst) {
@@ -396,34 +464,31 @@ async fn wait_for_database_ready(app_handle: &tauri::AppHandle, timeout: Duratio
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    
+
     false
 }
 
 /// ✅ Schedule update checks with proper delays
 async fn schedule_update_checks(app_handle: tauri::AppHandle) {
-    // Clone app_handle for the first task
-     let github_owner = get_github_owner();
+    let github_owner = get_github_owner();
     let github_repo = get_github_repo();
     let current_version = get_current_version();
-    let app_handle_1 = app_handle.clone();
-    
+
     // Initial update check after app is stable
-    tokio::spawn(async move {
+    let app_handle_1 = app_handle.clone();
+    async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(15)).await;
-        
+
         println!("🔍 Performing automatic update check...");
-        let updater = Updater::new(github_owner, github_repo, current_version);
+        let updater = Updater::new(github_owner.clone(), github_repo.clone(), current_version.clone());
         updater.check_and_notify(app_handle_1).await;
     });
-    
-    // Clone app_handle for the second task
-    let app_handle_2 = app_handle.clone();
-    
+
     // Auto-update attempt after longer delay
-    tokio::spawn(async move {
+    let app_handle_2 = app_handle.clone();
+    async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(45)).await;
-        
+
         println!("🔄 Attempting automatic update...");
         let mut updater = Updater::new(github_owner, github_repo, current_version);
         match updater.auto_update(app_handle_2).await {
@@ -434,16 +499,20 @@ async fn schedule_update_checks(app_handle: tauri::AppHandle) {
     });
 }
 
-/// ✅ Setup tray icon and UI (runs immediately)
+// === TRAY + UI ===
+
 fn setup_tray_and_ui(app: &mut tauri::App) -> tauri::Result<()> {
     println!("🎨 Setting up tray icon and UI...");
-    
+
     let app_handle = app.handle().clone();
-    
+
     // Create tray menu
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&quit])?;
-    let icon = app.default_window_icon().unwrap().clone();
+    let icon = app
+        .default_window_icon()
+        .expect("App should have a default icon")
+        .clone();
 
     // Build tray icon
     let tray = TrayIconBuilder::new()
@@ -451,18 +520,17 @@ fn setup_tray_and_ui(app: &mut tauri::App) -> tauri::Result<()> {
         .tooltip("ClipTray — starting...")
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(move |app, e| {
-            match e.id.as_ref() {
-                "quit" => app.exit(0),
-                _ => {}
-            }
+        .on_menu_event(move |app, e| match e.id.as_ref() {
+            "quit" => app.exit(0),
+            _ => {}
         })
         .on_tray_icon_event(move |tray, ev| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
-            } = ev {
+            } = ev
+            {
                 let app = tray.app_handle();
                 if let Some(w) = app.get_webview_window("main") {
                     if w.is_visible().unwrap_or(false) {
@@ -483,18 +551,18 @@ fn setup_tray_and_ui(app: &mut tauri::App) -> tauri::Result<()> {
 
     // Setup auto-updater
     setup_silent_auto_updater(&app.handle());
-    
-    // Update tray tooltip after a delay
-    let app_handle_for_tooltip = app.handle().clone();
-    tokio::spawn(async move {
-        // Wait a bit then update tooltip to show app is ready
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        
-        // Use the tray instance we built to update tooltip
-        if let Some(tray) = app_handle_for_tooltip.tray_by_id(tray.id()) {
-            let _ = tray.set_tooltip(Some("ClipTray — ready"));
-        }
-    });
+
+   // Update tray tooltip after a short delay (use Tauri runtime)
+let app_handle_for_tooltip = app_handle.clone();
+let tray_id = tray.id().clone(); // 👈 clone the ID so it is owned and 'static
+async_runtime::spawn(async move {
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    if let Some(tray) = app_handle_for_tooltip.tray_by_id(&tray_id) {
+        let _ = tray.set_tooltip(Some("ClipTray — ready"));
+    }
+});
+
 
     println!("✅ UI setup completed");
     Ok(())
@@ -502,9 +570,21 @@ fn setup_tray_and_ui(app: &mut tauri::App) -> tauri::Result<()> {
 
 /// ✅ Command to check database status from frontend
 #[tauri::command]
-async fn check_database_status(state: State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.is_database_ready.load(Ordering::SeqCst))
+async fn check_database_status(
+    app_state: tauri::State<'_, AppState>,
+) -> Result<bool, String> {
+    // Just read the atomic flag that initialize_database_async sets
+    let ready = app_state.is_database_ready.load(Ordering::SeqCst);
+
+    if ready {
+        println!("✅ check_database_status → DB is ready");
+    } else {
+        println!("⏳ check_database_status → DB not ready yet");
+    }
+
+    Ok(ready)
 }
+
 
 
 /// ✅ Window positioning helper
@@ -527,9 +607,14 @@ fn position_top_right_with_padding(
     let x = mpos.x as f64 + msize.width as f64 - POP_W - 20.0;
     let y = mpos.y as f64 + 20.0;
 
-    window.set_position(PhysicalPosition { x, y }).map_err(|e| e.to_string())?;
     window
-        .set_size(PhysicalSize { width: POP_W, height })
+        .set_position(PhysicalPosition { x, y })
+        .map_err(|e| e.to_string())?;
+    window
+        .set_size(PhysicalSize {
+            width: POP_W,
+            height,
+        })
         .map_err(|e| e.to_string())?;
     window.set_always_on_top(true).map_err(|e| e.to_string())?;
     window.show().map_err(|e| e.to_string())?;
@@ -565,7 +650,10 @@ fn resize_window(app: tauri::AppHandle, height: f64) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
         let clamped_height = height.clamp(MIN_POP_H, MAX_POP_H);
         window
-            .set_size(PhysicalSize { width: POP_W, height: clamped_height })
+            .set_size(PhysicalSize {
+                width: POP_W,
+                height: clamped_height,
+            })
             .map_err(|e| e.to_string())?;
     }
     Ok(())

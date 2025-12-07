@@ -1,28 +1,81 @@
 // src/db/sqlite_database.rs
 use sqlx::{sqlite::{SqlitePool, SqlitePoolOptions}};
-use chrono::Utc;
-
+use chrono::{DateTime, Utc};
+use std::fs;
+use std::path::{PathBuf};
 // Reuse your existing schemas from database.rs
 use crate::db::schemas::{ClipboardEntry, NewClipboardEntry, UpdateClipboardEntry};
+use log::{info, error};
+use directories::ProjectDirs;
 
-pub async fn create_sqlite_pool() -> Result<SqlitePool, Box<dyn std::error::Error>> {   
-    // Use a local SQLite database file
-    let database_url = "sqlite://cliptray_offline.db?mode=rwc";
-    println!("Connecting to SQLite database...");
-    
+
+fn to_sqlite_ts(dt: DateTime<Utc>) -> String {
+    dt.naive_utc()
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+}
+
+
+fn get_database_path() -> PathBuf {
+    // Get proper application data directory
+    if let Some(proj_dirs) = ProjectDirs::from("com", "ClipTray", "ClipTray") {
+        let data_dir = proj_dirs.data_dir();
+        
+        // Create directory if it doesn't exist
+        if !data_dir.exists() {
+            if let Err(e) = std::fs::create_dir_all(data_dir) {
+                eprintln!("Warning: Failed to create data directory: {}", e);
+                // Fallback to current directory
+                return std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join("cliptray_offline2.db");
+            }
+        }
+        
+        let db_path = data_dir.join("cliptray_offline2.db");
+        info!("Resolved database path: {:?}", db_path);
+        db_path
+    } else {
+        // Fallback to current directory
+        let current_dir = std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."));
+        let db_path = current_dir.join("cliptray_offline2.db");
+        info!("Using fallback database path: {:?}", db_path);
+        db_path
+    }
+}
+
+pub async fn create_sqlite_pool() -> Result<SqlitePool, Box<dyn std::error::Error>> {
+    // Get the database path
+    let db_path = get_database_path();
+    let db_path_str = db_path.to_str().ok_or("Invalid DB path")?;
+
+    // Log the database URL being used for connection
+    let database_url = format!("file:{}?mode=rwc", db_path_str);
+    info!("Connecting to SQLite database at: {}", database_url);
+
+    // Create the SQLite connection pool
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
-        .connect(database_url)
+        .connect(&database_url)
         .await?;
-    
+
+    // Test the connection to ensure it works
     sqlx::query("SELECT 1")
         .execute(&pool)
-        .await?;    
-    println!("SQLite database connected successfully!");    
+        .await?;
+
+    // Log the successful connection
+    info!("SQLite database connected successfully!");
+
     // Create tables if they don't exist
-    create_sqlite_tables(&pool).await?;    
+    create_sqlite_tables(&pool).await?;
+
     Ok(pool)
 }
+
+
+
 
 pub async fn create_sqlite_tables(pool: &SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
     println!("📝 Creating SQLite database tables if they don't exist...");
@@ -52,7 +105,7 @@ pub async fn create_sqlite_tables(pool: &SqlitePool) -> Result<(), Box<dyn std::
         r#"
         CREATE TABLE IF NOT EXISTS clipboard_entries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            organization_id TEXT NOT NULL,
+            organization_id TEXT,
             content TEXT NOT NULL,
             content_type TEXT NOT NULL DEFAULT 'text',
             content_hash TEXT UNIQUE NOT NULL,
@@ -79,7 +132,9 @@ pub async fn create_sqlite_tables(pool: &SqlitePool) -> Result<(), Box<dyn std::
             name TEXT NOT NULL,
             color TEXT NOT NULL DEFAULT '#6B7280',
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            sync_status TEXT NOT NULL DEFAULT 'local',
+        server_id INTEGER
         )
         "#
     )
@@ -116,6 +171,8 @@ pub async fn create_sqlite_tables(pool: &SqlitePool) -> Result<(), Box<dyn std::
         .execute(pool).await?;
     sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_organization_name_unique ON tags(organization_id, name)")
         .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_tags_sync_status ON tags(sync_status)")
+    .execute(pool).await?;
     
     println!("✅ SQLite database tables ready!");
     Ok(())
@@ -130,31 +187,130 @@ pub struct SqliteClipboardRepository;
 impl SqliteClipboardRepository {
     
     pub async fn save_entry(
-        pool: &SqlitePool, 
-        entry: NewClipboardEntry
-    ) -> Result<ClipboardEntry, Box<dyn std::error::Error>> {
-        let result = sqlx::query_as::<_, ClipboardEntry>(
+        pool: &SqlitePool,
+        entry: NewClipboardEntry,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        sqlx::query(
             r#"
             INSERT INTO clipboard_entries 
             (content, content_type, content_hash, source_app, source_window, timestamp, tags, organization_id, sync_status)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'local')
-            RETURNING *
-            "#
+            "#,
         )
         .bind(entry.content)
         .bind(entry.content_type)
         .bind(entry.content_hash)
         .bind(entry.source_app)
         .bind(entry.source_window)
-        .bind(entry.timestamp)
+        .bind(to_sqlite_ts(entry.timestamp))
         .bind(entry.tags)
-        .bind(entry.organization_id)     
-        .fetch_one(pool)
+        .bind(entry.organization_id)
+        .execute(pool)
         .await?;
-        
+
+        Ok(())
+    
+    }
+
+     pub async fn get_by_server_id(
+        pool: &SqlitePool,
+        server_id: i64,
+    ) -> Result<Option<ClipboardEntry>, Box<dyn std::error::Error>> {
+        let result = sqlx::query_as::<_, ClipboardEntry>(
+            r#"
+            SELECT *
+            FROM clipboard_entries
+            WHERE server_id = ?1
+            LIMIT 1
+            "#
+        )
+        .bind(server_id.to_string())
+        .fetch_optional(pool)
+        .await?;
+
         Ok(result)
     }
 
+    // Insert new local row from remote entry, mark as synced
+    pub async fn insert_from_remote(
+        pool: &SqlitePool,
+        remote: &ClipboardEntry,
+    ) -> Result<ClipboardEntry, Box<dyn std::error::Error>> {
+        let result = sqlx::query_as::<_, ClipboardEntry>(
+            r#"
+            INSERT INTO clipboard_entries (
+                organization_id,
+                content,
+                content_type,
+                content_hash,
+                source_app,
+                source_window,
+                timestamp,
+                tags,
+                is_pinned,
+                sync_status,
+                server_id
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'synced', ?10)
+            RETURNING *
+            "#
+        )
+        .bind(&remote.organization_id)
+        .bind(&remote.content)
+        .bind(&remote.content_type)
+        .bind(&remote.content_hash)
+        .bind(&remote.source_app)
+        .bind(&remote.source_window)
+        .bind(to_sqlite_ts(remote.timestamp))
+        .bind(&remote.tags)
+        .bind(remote.is_pinned)
+        .bind(remote.id.to_string())
+        .fetch_one(pool)
+        .await?;
+
+        Ok(result)
+    }
+
+    // Update existing local row from remote entry (for same server_id)
+    pub async fn update_from_remote(
+        pool: &SqlitePool,
+        local_id: i64,
+        remote: &ClipboardEntry,
+    ) -> Result<ClipboardEntry, Box<dyn std::error::Error>> {
+        let result = sqlx::query_as::<_, ClipboardEntry>(
+            r#"
+            UPDATE clipboard_entries
+            SET
+                content      = ?1,
+                content_type = ?2,
+                content_hash = ?3,
+                source_app   = ?4,
+                source_window= ?5,
+                timestamp    = ?6,
+                tags         = ?7,
+                is_pinned    = ?8,
+                sync_status  = 'synced'
+            WHERE id = ?9
+            RETURNING *
+            "#
+        )
+        .bind(&remote.content)
+        .bind(&remote.content_type)
+        .bind(&remote.content_hash)
+        .bind(&remote.source_app)
+        .bind(&remote.source_window)
+        .bind(to_sqlite_ts(remote.timestamp))
+        .bind(&remote.tags)
+        .bind(remote.is_pinned)
+        .bind(local_id)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(result)
+    }
+
+
+    
     pub async fn get_by_organization(
         pool: &SqlitePool, 
         organization_id: &str,
@@ -233,79 +389,80 @@ impl SqliteClipboardRepository {
         Ok(results)
     }
     
-    pub async fn update_entry(
-        pool: &SqlitePool, 
-        id: i64, 
-        update: UpdateClipboardEntry
-    ) -> Result<ClipboardEntry, Box<dyn std::error::Error>> {
-        let result = sqlx::query_as::<_, ClipboardEntry>(
-            r#"
-            UPDATE clipboard_entries 
-            SET 
-                is_pinned = COALESCE(?1, is_pinned),
-                tags = COALESCE(?2, tags)
-            WHERE id = ?3
-            RETURNING *
-            "#
-        )
-        .bind(update.is_pinned)
-        .bind(update.tags)
-        .bind(id)
-        .fetch_one(pool)
-        .await?;
-        
-        Ok(result)
-    }
+ pub async fn update_entry(
+    pool: &SqlitePool, 
+    id: i64, 
+    update: UpdateClipboardEntry
+) -> Result<ClipboardEntry, Box<dyn std::error::Error>> {
+    let result = sqlx::query_as::<_, ClipboardEntry>(
+        r#"
+        UPDATE clipboard_entries 
+        SET 
+            is_pinned   = COALESCE(?1, is_pinned),
+            tags        = COALESCE(?2, tags),
+            sync_status = 'local'
+        WHERE id = ?3
+        RETURNING *
+        "#
+    )
+    .bind(update.is_pinned)
+    .bind(update.tags)
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
     
-    pub async fn delete_entry(
-        pool: &SqlitePool, 
-        id: i64
-    ) -> Result<bool, Box<dyn std::error::Error>> {
-        let result = sqlx::query(
-            "DELETE FROM clipboard_entries WHERE id = ?1"
-        )
-        .bind(id)
-        .execute(pool)
-        .await?;
-        
-        Ok(result.rows_affected() > 0)
-    }
+    Ok(result)
+}
 
-    pub async fn update_entry_content(
-        pool: &SqlitePool,
-        entry_id: i64,
-        new_content: &str,
-    ) -> Result<ClipboardEntry, Box<dyn std::error::Error>> {
-        let content_hash = {
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            let mut hasher = DefaultHasher::new();
-            new_content.hash(&mut hasher);
-            format!("{:x}", hasher.finish())
-        };
-        
-        let result = sqlx::query_as::<_, ClipboardEntry>(
-            r#"
-            UPDATE clipboard_entries 
-            SET 
-                content = ?1,
-                content_hash = ?2,
-                timestamp = ?3
-            WHERE id = ?4
-            RETURNING *
-            "#
-        )
-        .bind(new_content)
-        .bind(content_hash)
-        .bind(Utc::now())
-        .bind(entry_id)
-        .fetch_one(pool)
-        .await?;
-        
-        Ok(result)
-    }
     
-    pub async fn exists_by_hash(
+   pub async fn delete_entry(
+    pool: &SqlitePool,
+    id: i64
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+    let result = sqlx::query(
+        r#"
+        DELETE FROM clipboard_entries
+        WHERE id = ?1
+        "#
+    )
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+  }
+
+
+
+pub async fn update_entry_content(
+    pool: &SqlitePool,
+    entry_id: i64,
+    new_content: &str,
+) -> Result<ClipboardEntry, Box<dyn std::error::Error>> {
+    
+    let result = sqlx::query_as::<_, ClipboardEntry>(
+        r#"
+        UPDATE clipboard_entries 
+        SET 
+            content   = ?1,
+            timestamp = ?2,
+            sync_status = 'local'
+        WHERE id = ?3
+        RETURNING *
+        "#
+    )
+    .bind(new_content)
+    .bind(to_sqlite_ts(Utc::now()))
+    .bind(entry_id)
+    .fetch_one(pool)
+    .await?;
+    
+    Ok(result)
+}
+
+
+
+ pub async fn exists_by_hash(
         pool: &SqlitePool, 
         content_hash: &str
     ) -> Result<bool, Box<dyn std::error::Error>> {
@@ -333,7 +490,7 @@ impl SqliteClipboardRepository {
     
     pub async fn delete_unpinned_older_than(pool: &SqlitePool, organization_id: &str, days: i32) -> Result<usize, sqlx::Error> {
         sqlx::query(
-            "DELETE FROM clipboard_entries WHERE organization_id = ?1 AND is_pinned = false AND created_at < datetime('now', ?2)"
+            "DELETE FROM clipboard_entries WHERE organization_id = ?1 AND is_pinned = false AND timestamp  < datetime('now', ?2)"
         )
         .bind(organization_id)
         .bind(format!("-{} days", days))
@@ -441,18 +598,21 @@ impl SqliteClipboardRepository {
         println!("📋 New tags JSON: {:?}", new_tags_json);
         
         // Update the entry
-        let result = sqlx::query_as::<_, ClipboardEntry>(
-            r#"
-            UPDATE clipboard_entries 
-            SET tags = ?1
-            WHERE id = ?2
-            RETURNING *
-            "#
-        )
-        .bind(&new_tags_json)
-        .bind(clipboard_entry_id)
-        .fetch_one(pool)
-        .await
+       let result = sqlx::query_as::<_, ClipboardEntry>(
+    r#"
+    UPDATE clipboard_entries 
+    SET 
+        tags        = ?1,
+        sync_status = 'local'
+    WHERE id = ?2
+    RETURNING *
+    "#
+)
+.bind(&new_tags_json)
+.bind(clipboard_entry_id)
+.fetch_one(pool)
+.await
+
         .map_err(|e| format!("Update failed: {}", e))?;
         
         println!("✅ Database update successful!");
@@ -482,7 +642,36 @@ impl SqliteClipboardRepository {
         Ok(results)
     }
 
-    pub async fn mark_as_synced(pool: &SqlitePool, local_id: i64, server_id: i64) -> Result<(), Box<dyn std::error::Error>> {
+   pub async fn get_pending_sync_entries_for_org(
+        pool: &SqlitePool,
+        organization_id: &str,
+        limit: Option<i64>,
+    ) -> Result<Vec<ClipboardEntry>, Box<dyn std::error::Error>> {
+        let limit = limit.unwrap_or(500);
+
+        let results = sqlx::query_as::<_, ClipboardEntry>(
+            r#"
+            SELECT *
+            FROM clipboard_entries
+            WHERE organization_id = ?1
+              AND sync_status = 'local'
+            ORDER BY created_at ASC
+            LIMIT ?2
+            "#
+        )
+        .bind(organization_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(results)
+    }
+
+    pub async fn mark_as_synced(
+        pool: &SqlitePool,
+        local_id: i64,
+        server_id: i64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         sqlx::query(
             "UPDATE clipboard_entries SET sync_status = 'synced', server_id = ?1 WHERE id = ?2"
         )
@@ -490,7 +679,7 @@ impl SqliteClipboardRepository {
         .bind(local_id)
         .execute(pool)
         .await?;
-        
+
         Ok(())
     }
 }

@@ -8,12 +8,14 @@ export function useTagsDB() {
 
 // In useTagsDB.js - update the getTags function
 const getTags = useCallback(async (localItems = []) => {
+
   try {
+
     setLoading(true);
     setError(null);
 
     // Fetch tags from the backend
-    const tags = await invoke('get_organization_tags');
+    const tags = await invoke('get_tags');
     
     // If no localItems provided, return unsorted tags
     if (!localItems || localItems.length === 0) {
@@ -88,20 +90,27 @@ const getTags = useCallback(async (localItems = []) => {
     }
   }, []);
 
-  const deleteTag = useCallback(async (tagId) => {
-    try {
-      setLoading(true);
-      setError(null);
-      const success = await invoke('delete_tag', { tagId });
-      return success;
-    } catch (err) {
-      setError(err.message);
-      console.error('Error deleting tag:', err);
-      throw err;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+
+const deleteTag = useCallback(async (dbId) => {
+  try {
+    setLoading(true);
+    setError(null);
+
+    const success = await invoke("delete_tag", { tagId: dbId });
+
+    return success;
+  } catch (err) {
+    console.error("Error deleting tag:", err);
+    setError(err.message || "Failed to delete tag");
+    throw err;
+  } finally {
+    setLoading(false);
+  }
+}, []);
+
+
+
+
 
   return {
     getTags,

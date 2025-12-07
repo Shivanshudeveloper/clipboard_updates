@@ -3,22 +3,45 @@ use sqlx::{PgPool, postgres::PgPoolOptions};
 use crate::db::schemas::{ClipboardEntry, NewClipboardEntry, UpdateClipboardEntry};
 use crate::config::{get_database_url};
 use serde_json;
+use std::time::Duration;
 
 pub async fn create_db_pool() -> Result<PgPool, Box<dyn std::error::Error>> {   
     let database_url = get_database_url();
     println!("Connecting to database...");
+
+    let connect_result = tokio::time::timeout(
+        Duration::from_secs(40), 
+        PgPoolOptions::new()
+            .max_connections(5)
+            .acquire_timeout(Duration::from_secs(30))
+            .connect(&database_url),
+    )
+    .await;
     
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&database_url)
-        .await?;
+    let pool = match connect_result {
+        // Connected successfully
+        Ok(Ok(pool)) => {
+            println!("✅ Postgres connected successfully!");
+            pool
+        }
+        // SQLx error inside timeout
+        Ok(Err(e)) => {
+            eprintln!("❌ Postgres connect failed: {e}");
+            return Err(format!("Postgres connect failed: {e}").into());
+        }
+
+        Err(_) => {
+            eprintln!("⚠️ Postgres connect TIMED OUT (3s). Running in local-only mode.");
+            return Err("Postgres connect timed out".into());
+        }
+    };
     
     sqlx::query("SELECT 1")
         .execute(&pool)
         .await?;    
     println!("Database connected successfully!");    
     // Create tables if they don't exist
-    create_tables(&pool).await?;    
+    // create_tables(&pool).await?;    
     Ok(pool)
 }
 
@@ -189,15 +212,26 @@ pub struct ClipboardRepository;
 
 impl ClipboardRepository {
     
-    pub async fn save_entry(
+ pub async fn save_entry(
         pool: &PgPool, 
         entry: NewClipboardEntry
     ) -> Result<ClipboardEntry, Box<dyn std::error::Error>> {
+        // Idempotent upsert by content_hash
         let result = sqlx::query_as::<_, ClipboardEntry>(
             r#"
             INSERT INTO clipboard_entries 
-            (content, content_type, content_hash, source_app, source_window, timestamp, tags, organization_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                (content, content_type, content_hash, source_app, source_window, timestamp, tags, organization_id, is_pinned)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (content_hash) DO UPDATE
+            SET
+                content        = EXCLUDED.content,
+                content_type   = EXCLUDED.content_type,
+                source_app     = EXCLUDED.source_app,
+                source_window  = EXCLUDED.source_window,
+                timestamp      = EXCLUDED.timestamp,
+                tags           = COALESCE(EXCLUDED.tags, clipboard_entries.tags),
+                organization_id = EXCLUDED.organization_id,
+                is_pinned    =  EXCLUDED.is_pinned
             RETURNING *
             "#
         )
@@ -208,13 +242,14 @@ impl ClipboardRepository {
         .bind(entry.source_window)
         .bind(entry.timestamp)
         .bind(entry.tags)
-        // REMOVED: .bind(entry.user_id) 
-        .bind(entry.organization_id)     
+        .bind(entry.organization_id)
+        .bind(entry.is_pinned)
         .fetch_one(pool)
         .await?;
         
         Ok(result)
     }
+
 
     pub async fn get_by_organization(
         pool: &PgPool, 
@@ -329,6 +364,49 @@ impl ClipboardRepository {
         .execute(pool)
         .await?;
         
+        Ok(result.rows_affected() > 0)
+    }
+
+   pub async fn update_from_local(
+        pool: &PgPool,
+        server_id: i64,
+        local: &ClipboardEntry,
+    ) -> Result<ClipboardEntry, sqlx::Error> {
+        sqlx::query_as::<_, ClipboardEntry>(
+            r#"
+            UPDATE clipboard_entries
+            SET
+                is_pinned = $1,
+                tags      = $2,
+                timestamp = $3
+            WHERE id = $4
+            RETURNING *
+            "#
+        )
+        .bind(local.is_pinned)
+        .bind(&local.tags)
+        .bind(local.timestamp)
+        .bind(server_id)
+        .fetch_one(pool)
+        .await
+    }
+
+    pub async fn delete_entry_for_org(
+        pool: &PgPool,
+        id: i64,
+        organization_id: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM clipboard_entries
+            WHERE id = $1 AND organization_id = $2
+            "#,
+        )
+        .bind(id)
+        .bind(organization_id)
+        .execute(pool)
+        .await?;
+
         Ok(result.rows_affected() > 0)
     }
 

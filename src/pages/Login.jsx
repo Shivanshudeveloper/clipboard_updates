@@ -11,6 +11,7 @@ import {
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 
 import { invoke } from "@tauri-apps/api/core";
+import {useBootstrap} from "../hooks/useBootstrap";
 
 // Helper function to get organization ID for a user (kept from your original)
 async function getOrganizationIdForUser(userId) {
@@ -53,7 +54,7 @@ async function handlePostLogin(user, navigate) {
 
     console.log("backendUser from login_user:", backendUser);
 
-
+    window.location.reload();
     navigate("/home");
   } catch (error) {
     throw new Error(`Login processing failed: ${error.message}`);
@@ -70,6 +71,8 @@ export default function LoginPage() {
   const [debugInfo, setDebugInfo] = useState("");
   const [error, setError] = useState("");
   const navigate = useNavigate();
+
+  useBootstrap();
 
 // useEffect(() => {
 //   let unsubscribe = null;
@@ -187,7 +190,7 @@ export default function LoginPage() {
       })
     );
 
-    // No need to reload; just go home
+    window.location.reload();
     navigate("/home");
   } catch (err) {
     console.error("Google login failed:", err);

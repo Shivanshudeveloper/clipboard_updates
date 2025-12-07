@@ -22,6 +22,8 @@ impl Default for PurgeCadence {
     fn default() -> Self {
         Self::Never
     }
+
+    
 }
 
 impl FromStr for PurgeCadence {
@@ -90,6 +92,18 @@ impl PurgeCadence {
             "Every month",
         ]
     }
+
+    pub fn to_days_i32(&self) -> Option<i32> {
+        self.to_duration().map(|d| {
+            let days = d.num_days();
+            if days <= 0 {
+                1
+            } else {
+                days as i32
+            }
+        })
+    }
+    
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -101,6 +115,7 @@ pub struct User {
     pub created_at: DateTime<Utc>,
     pub organization_id: Option<String>,
     pub purge_cadence: PurgeCadence, // New field with default Never
+    pub retain_tags: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +143,7 @@ pub struct UserResponse {
     pub created_at: DateTime<Utc>,
     pub organization_id: Option<String>,
     pub purge_cadence: String, // Serialized as display string for frontend
+    pub retain_tags: bool,
 }
 
 impl From<User> for UserResponse {
@@ -140,6 +156,7 @@ impl From<User> for UserResponse {
             created_at: user.created_at,
             organization_id: user.organization_id,
             purge_cadence: user.purge_cadence.to_display_string().to_string(),
+            retain_tags: user.retain_tags,
         }
     }
 }

@@ -13,6 +13,21 @@ const GeneralSettings = ({
   const [isLoading, setIsLoading] = useState(false);
   const [retainTagged, setRetainTagged] = useState(false);
 
+  useEffect(() => {
+  loadRetainTags();
+}, []);
+
+const loadRetainTags = async () => {
+  try {
+    const value = await invoke("get_current_user_retain_tags");
+    console.log("⚙️ retain_tags loaded:", value);
+    setRetainTagged(value);
+  } catch (err) {
+    console.error("❌ Failed to load retain_tags:", err);
+  }
+};
+
+
   const MIN_LOADING_MS = 1000; // 1s minimum loading effect
 
   useEffect(() => {

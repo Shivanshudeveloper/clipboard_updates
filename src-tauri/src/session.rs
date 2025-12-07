@@ -41,14 +41,18 @@ pub fn get_current_user_id() -> Option<String> {
 pub fn get_current_organization_id() -> Option<String> {
     match CURRENT_USER.read() {
         Ok(current_user) => {
+            // Debug log: Show the current user before returning the value
+            // println!("🔍 Current user found: {:?}", current_user);
             current_user.as_ref().map(|user| user.organization_id.clone())
         }
-        Err(_) => {
-            println!("❌ Failed to get organization ID - read lock poisoned");
+        Err(poisoned) => {
+            // Log the poisoned error and return None
+            eprintln!("❌ Failed to get organization ID - read lock poisoned: {:?}", poisoned);
             None
         }
     }
 }
+
 
 pub fn get_current_user_email() -> Option<String> {
     match CURRENT_USER.read() {
@@ -65,7 +69,13 @@ pub fn get_current_user_email() -> Option<String> {
 pub fn get_current_session() -> Option<UserSession> {
     match CURRENT_USER.read() {
         Ok(current_user) => {
-            current_user.as_ref().cloned()
+            if let Some(user) = current_user.as_ref() {
+                println!("✅ Found current session: {:?}", user);
+                Some(user.clone()) // Return the session as a clone
+            } else {
+                println!("⚠️ No current session found in the RwLock.");
+                None
+            }
         }
         Err(_) => {
             println!("❌ Failed to get session - read lock poisoned");
@@ -73,6 +83,7 @@ pub fn get_current_session() -> Option<UserSession> {
         }
     }
 }
+
 
 pub fn clear_current_user() {
     if let Ok(mut current_user) = CURRENT_USER.write() {

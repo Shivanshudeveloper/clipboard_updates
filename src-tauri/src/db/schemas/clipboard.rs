@@ -27,7 +27,9 @@ pub struct NewClipboardEntry {
     pub source_window: String,
     pub timestamp: DateTime<Utc>,
     pub tags: Option<String>,
+    pub is_pinned: bool,
     pub organization_id: Option<String>,
+    
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -54,6 +56,7 @@ impl NewClipboardEntry {
             source_window,
             timestamp: Utc::now(),
             tags: None,
+            is_pinned: false,
             organization_id:None, // Set to None initially
         }
     }
