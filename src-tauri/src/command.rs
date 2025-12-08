@@ -22,7 +22,6 @@ use tauri_plugin_opener::OpenerExt;
 use crate::db::sqlite_database::SqliteClipboardRepository;
 use crate::google_oauth::{GoogleOAuth, GoogleOAuthConfig, GoogleUserInfo};
 use tiny_http::{Server, Response, ListenAddr};
-
 use url::Url;
 use uuid::Uuid;
 use crate::DbPools;
@@ -2248,3 +2247,5 @@ async fn bootstrap_from_cloud_for_org(
 
     Ok(changed_entries + changed_tags)
 }
+
+

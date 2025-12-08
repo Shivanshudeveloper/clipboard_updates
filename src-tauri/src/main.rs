@@ -153,6 +153,11 @@ fn main() {
             // ✅ Setup tray + UI immediately
             setup_tray_and_ui(app)?;
 
+            if let Err(e) = ensure_main_window(&app_handle) {
+                eprintln!("❌ Error opening main window: {}", e);
+            }
+           
+
             // ✅ Background initialization on Tauri's async runtime
             async_runtime::spawn(async move {
                 if let Err(e) = initialize_application_async(app_handle.clone()).await {

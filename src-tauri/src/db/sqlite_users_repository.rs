@@ -76,6 +76,32 @@ impl SqliteUsersRepository {
         row.map(Into::into)
     }
 
+    pub async fn create_user_session(
+    pool: &SqlitePool,
+    user_id: &str,
+    organization_id: &str,
+    email: &str,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now();
+
+    sqlx::query(
+        r#"
+        INSERT INTO user_session (user_id, organization_id, email, created_at)
+        VALUES (?1, ?2, ?3, ?4)
+        "#,
+    )
+    .bind(user_id)
+    .bind(organization_id)
+    .bind(email)
+    .bind(now)
+    .execute(pool)
+    .await?;
+
+    println!("✅ User session created for user: {}", user_id);
+    Ok(())
+}
+
+
     /// Get user by Firebase UID
     pub async fn get_by_firebase_uid(
         pool: &SqlitePool,

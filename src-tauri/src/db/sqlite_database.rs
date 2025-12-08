@@ -100,6 +100,8 @@ pub async fn create_sqlite_tables(pool: &SqlitePool) -> Result<(), Box<dyn std::
     .execute(pool)
     .await?;
 
+    
+
     println!("📝 Creating clipboard table if not exists...");
     sqlx::query(
         r#"
