@@ -106,6 +106,49 @@ impl PurgeCadence {
     
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[sqlx(type_name = "user_plan", rename_all = "snake_case")]
+pub enum Plan {
+    Free,
+    Pro,
+}
+
+impl Default for Plan {
+    fn default() -> Self {
+        Self::Free
+    }
+}
+
+impl Plan {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Free => "free",
+            Self::Pro => "pro",
+        }
+    }
+
+    pub fn to_display_string(&self) -> &'static str {
+        match self {
+            Self::Free => "Free",
+            Self::Pro => "Pro",
+        }
+    }
+}
+
+impl FromStr for Plan {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "free" => Ok(Self::Free),
+            "pro" => Ok(Self::Pro),
+            _ => Err(format!("Invalid plan: {}", s)),
+        }
+    }
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct User {
     pub id: i64,
@@ -116,6 +159,7 @@ pub struct User {
     pub organization_id: Option<String>,
     pub purge_cadence: PurgeCadence, // New field with default Never
     pub retain_tags: bool,
+    pub plan: Plan,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,7 +168,6 @@ pub struct NewUser {
     pub email: String,
     pub display_name: Option<String>,
     pub organization_id: Option<String>,
-    // No purge_cadence here - it will always default to Never for new users
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -144,6 +187,7 @@ pub struct UserResponse {
     pub organization_id: Option<String>,
     pub purge_cadence: String, // Serialized as display string for frontend
     pub retain_tags: bool,
+    pub plan: String,
 }
 
 impl From<User> for UserResponse {
@@ -157,6 +201,7 @@ impl From<User> for UserResponse {
             organization_id: user.organization_id,
             purge_cadence: user.purge_cadence.to_display_string().to_string(),
             retain_tags: user.retain_tags,
+            plan: user.plan.to_display_string().to_string(),
         }
     }
 }

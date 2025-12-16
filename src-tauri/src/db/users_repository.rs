@@ -1,4 +1,4 @@
-use crate::db::schemas::users::{User, NewUser, UpdateUser, UserResponse, PurgeCadence};
+use crate::db::schemas::users::{User, NewUser, UpdateUser, UserResponse, PurgeCadence, Plan};
 use sqlx::{PgPool};
 use chrono::Utc;
 
@@ -12,9 +12,9 @@ impl UsersRepository {
         
         let result = sqlx::query_as::<_, User>(
             r#"
-            INSERT INTO users 
-                (firebase_uid, email, display_name, created_at, organization_id, purge_cadence)
-            VALUES ($1, $2, $3, $4, $5, $6)
+           INSERT INTO users 
+            (firebase_uid, email, display_name, created_at, organization_id, purge_cadence, plan)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING *
             "#
         )
@@ -24,6 +24,8 @@ impl UsersRepository {
         .bind(now)
         .bind(&new_user.organization_id)
         .bind(PurgeCadence::Never) // Always default to Never for new users
+        .bind(PurgeCadence::Never)
+        .bind(Plan::Free)
         .fetch_one(pool)
         .await;
 

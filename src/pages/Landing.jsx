@@ -16,6 +16,7 @@ import Header from "../components/common/header";
 import ContextMenu from "../components/home/ContextMenu";
 import TagDropdown from "../components/home/TagDropdown";
 import CreateTagModal from "../components/home/CreateTagModal";
+import { useUserPlan } from "../hooks/useUserPlan";
 
 
 
@@ -48,6 +49,22 @@ export default function ClipTray() {
   const [notification, setNotification] = useState(null);
 
   const navigate = useNavigate();
+
+   const { plan, isFree, isPro, loading: planLoading } = useUserPlan();
+  const FREE_PIN_LIMIT = 3;
+
+  const [showPinLimitBanner, setShowPinLimitBanner] = useState(false);
+
+  // count pinned from current localItems
+  const pinnedCount = useMemo(() => {
+    return localItems.filter((i) => i.is_pinned).length;
+  }, [localItems]);
+
+  // auto-hide banner if user unpins or is pro
+  useEffect(() => {
+    if (isPro) setShowPinLimitBanner(false);
+    if (isFree && pinnedCount < FREE_PIN_LIMIT) setShowPinLimitBanner(false);
+  }, [isFree, isPro, pinnedCount]);
 
   const showNotification = (message, type = "error") => {
     setNotification({ message, type });
@@ -337,32 +354,37 @@ const openContextMenu = (itemId, rect) => {
   };
 
   const togglePin = async (id) => {
-    const currentItem = items.find(x => x.id === id);
-    const newPinnedState = !currentItem?.pinned;
-    
-    try {
-      await invoke("update_entry", { 
-        id: id,
-        updates: { is_pinned: newPinnedState }
-      });
-      
-      setPinnedItems(prev => {
-        const newPinned = new Set(prev);
-        if (newPinnedState) {
-          newPinned.add(id);
-        } else {
-          newPinned.delete(id);
-        }
-        return newPinned;
-      });
-      
-    } catch (err) {
-      console.error("Failed to update pin state:", err);
-      showNotification("Failed to update pin state.", "error");
-    }
-    
+  const currentItem = items.find((x) => x.id === id);
+  const newPinnedState = !currentItem?.pinned;
+
+  // ✅ enforce limit only when trying to PIN (not unpin)
+  if (!planLoading && isFree && newPinnedState && pinnedCount >= FREE_PIN_LIMIT) {
+    setShowPinLimitBanner(true);
+    showNotification("Limit reached. Upgrade to Pro to pin more than 3 items.", "error");
     setMenu(null);
-  };
+    return;
+  }
+
+  try {
+    await invoke("update_entry", {
+      id,
+      updates: { is_pinned: newPinnedState },
+    });
+
+    setPinnedItems((prev) => {
+      const next = new Set(prev);
+      if (newPinnedState) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  } catch (err) {
+    console.error("Failed to update pin state:", err);
+    showNotification("Failed to update pin state.", "error");
+  }
+
+  setMenu(null);
+};
+
 
   const editItem = async (id) => {
     const current = items.find(x => x.id === id);
@@ -658,7 +680,11 @@ const openContextMenu = (itemId, rect) => {
       setQ={setQ}
       onLogout={handleLogout}
       isLoggingOut={isLoggingOut}
+      showUpgradeBanner={showPinLimitBanner}
+      onUpgradeClick={() => navigate("/settings")}   // or your upgrade page
+      onDismissUpgrade={() => setShowPinLimitBanner(false)}
       />
+
 
 
       {/* Tags */}
@@ -708,7 +734,15 @@ const openContextMenu = (itemId, rect) => {
         {/* Recent */}
         <div className="flex flex-col" style={{ height: '40%', minHeight: '50%' }}>
           <div className="flex justify-between items-center p-2 text-xs font-semibold text-gray-500 uppercase tracking-wider flex-shrink-0">
+            <div className="flex items-center gap-2">
             <span>Recent</span>
+
+            {isFree && (
+              <span className="normal-case text-[10px] font-medium text-gray-400">
+                Deletes every 24 hrs
+              </span>
+            )}
+            </div>
             <span className="bg-gray-100 text-gray-500 text-xs font-semibold py-0.5 px-1.5 rounded-full">
               {recent.length}
             </span>

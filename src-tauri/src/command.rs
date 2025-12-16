@@ -2,7 +2,7 @@ use tauri::command;
 use crate::db::schemas::{ClipboardEntry, NewClipboardEntry};
 use crate::auth::verify_firebase_token;
 use crate::db::users_repository::UsersRepository;
-use crate::db::schemas::users::{NewUser, UserResponse, PurgeCadence};
+use crate::db::schemas::users::{NewUser, UserResponse, PurgeCadence, Plan};
 use crate::db::schemas::tags::{Tag, NewTag, UpdateTag, TagResponse};
 use crate::db::tags_repository::TagRepository;
 use rand::Rng;
@@ -195,7 +195,6 @@ pub async fn google_login(
     Ok(UserResponse::from(created))
 }
 
-// ======================= CLIPBOARD ENTRIES =======================
 
 #[tauri::command]
 pub async fn get_my_entries(
@@ -247,6 +246,25 @@ pub async fn get_entry_by_id(
         .await
         .map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn get_user_plan(
+    db_pools: tauri::State<'_, DbPools>,
+) -> Result<String, String> {
+    let organization_id = crate::session::get_current_organization_id()
+        .ok_or_else(|| "User not logged in".to_string())?;
+
+    let plan: Plan = SqliteUsersRepository::get_user_plan(
+        &db_pools.sqlite,
+        &organization_id,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(plan.to_display_string().to_string())
+}
+
+
 
 #[tauri::command]
 pub async fn delete_entry(

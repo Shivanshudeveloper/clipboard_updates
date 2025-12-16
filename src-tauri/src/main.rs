@@ -13,6 +13,7 @@ use tauri::{
     tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent},
     PhysicalPosition, PhysicalSize, State,
 };
+use tauri::{WebviewWindowBuilder,  WindowEvent};
 use tauri_utils::config::WebviewUrl;
 use std::time::Duration;
 
@@ -67,6 +68,7 @@ use command::{
     google_login,
     debug_session_state,
     get_current_user,
+    get_user_plan,
 
     // Application updates
     install_update,
@@ -156,6 +158,10 @@ fn main() {
             if let Err(e) = ensure_main_window(&app_handle) {
                 eprintln!("❌ Error opening main window: {}", e);
             }
+
+            if let Err(e) = ensure_pricing_window(&app_handle) {
+    eprintln!("❌ Failed to create pricing window: {}", e);
+}
            
 
             // ✅ Background initialization on Tauri's async runtime
@@ -168,6 +174,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            open_pricing_window,
             // Entry operations
             get_my_entries,
             get_recent_entries,
@@ -209,6 +216,7 @@ fn main() {
             debug_session_state,
             get_current_user,
             restore_session,
+            get_user_plan,
 
             // Update operations
             install_update,
@@ -246,6 +254,8 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("❌ Error while running Tauri application");
 }
+
+
 
 // === AUTOSTART ===
 
@@ -693,6 +703,40 @@ fn ensure_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .min_inner_size(POP_W, MIN_POP_H)
         .max_inner_size(POP_W, MAX_POP_H)
         .build()?;
+    Ok(())
+}
+
+fn ensure_pricing_window(app: &tauri::AppHandle) -> tauri::Result<()> {
+    if app.get_webview_window("pricing").is_some() {
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(app, "pricing", WebviewUrl::App("index.html#/pricing".into()))
+        .title("ClipTray — Pricing")
+        .visible(false)
+        .resizable(true)
+        .maximizable(true)
+        .minimizable(true)
+        .decorations(true)
+        .always_on_top(false)
+        .skip_taskbar(true)
+        .inner_size(500.0, 350.0)
+        .min_inner_size(200.0, 50.0)
+        .build()?;
+
+    Ok(())
+}
+
+
+#[tauri::command]
+fn open_pricing_window(app: tauri::AppHandle) -> Result<(), String> {
+    ensure_pricing_window(&app).map_err(|e| e.to_string())?;
+
+    if let Some(w) = app.get_webview_window("pricing") {
+        w.show().map_err(|e| e.to_string())?;
+        w.set_focus().map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }
 

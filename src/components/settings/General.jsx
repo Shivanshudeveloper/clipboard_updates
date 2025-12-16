@@ -1,43 +1,28 @@
 import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Lock ,Info, Crown} from "lucide-react";
+import { useUserPlan } from "../../hooks/useUserPlan"; // adjust path if needed
+import { Link } from 'react-router-dom';
 
-const GeneralSettings = ({ 
+const GeneralSettings = ({
   startAtLogin,
   setStartAtLogin,
   autoPurgeUnpinned,
   setAutoPurgeUnpinned,
   purgeCadence,
-  setPurgeCadence
+  setPurgeCadence,
 }) => {
   const [availablePurgeOptions, setAvailablePurgeOptions] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [retainTagged, setRetainTagged] = useState(false);
 
-  useEffect(() => {
-  loadRetainTags();
-}, []);
+  const { isFree, loading: planLoading } = useUserPlan();
 
-const loadRetainTags = async () => {
-  try {
-    const value = await invoke("get_current_user_retain_tags");
-    console.log("⚙️ retain_tags loaded:", value);
-    setRetainTagged(value);
-  } catch (err) {
-    console.error("❌ Failed to load retain_tags:", err);
-  }
-};
-
-
-  const MIN_LOADING_MS = 1000; // 1s minimum loading effect
-
-  useEffect(() => {
-    loadPurgeSettings();
-  }, []);
+  const MIN_LOADING_MS = 200;
 
   const withMinLoading = async (fn) => {
     setIsLoading(true);
     const start = Date.now();
-
     try {
       await fn();
     } finally {
@@ -47,16 +32,33 @@ const loadRetainTags = async () => {
     }
   };
 
+  useEffect(() => {
+    loadRetainTags();
+    loadPurgeSettings();
+  }, []);
+
+  const loadRetainTags = async () => {
+    try {
+      const value = await invoke("get_current_user_retain_tags");
+      setRetainTagged(value);
+    } catch (err) {
+      console.error("❌ Failed to load retain_tags:", err);
+    }
+  };
+
   const loadPurgeSettings = async () => {
     try {
-      console.log("📋 Loading purge settings...");
-
       const options = await invoke("get_purge_cadence_options");
       setAvailablePurgeOptions(options);
-      console.log("✅ Available purge options:", options);
 
       const settings = await invoke("get_current_purge_settings");
-      console.log("✅ Current purge settings:", settings);
+
+      // ✅ Free plan locked to Every 24 hours
+      if (!planLoading && isFree) {
+        setAutoPurgeUnpinned(true);
+        setPurgeCadence("Every 24 hours");
+        return;
+      }
 
       setAutoPurgeUnpinned(settings.auto_purge_enabled);
       setPurgeCadence(settings.purge_cadence);
@@ -69,49 +71,45 @@ const loadRetainTags = async () => {
     }
   };
 
+  // keep locked even after plan loads
+  useEffect(() => {
+    if (!planLoading && isFree) {
+      setAutoPurgeUnpinned(true);
+      setPurgeCadence("Every 24 hours");
+    }
+  }, [isFree, planLoading, setAutoPurgeUnpinned, setPurgeCadence]);
+
   const handleRetainTaggedChange = async (checked) => {
     await withMinLoading(async () => {
-      // optimistic update
       setRetainTagged(checked);
-      console.log("🔄 Updating retain_tags to:", checked);
-
       try {
-        await invoke("update_retain_tags_setting", {
-          retainTags: checked,
-        });
-        console.log("✅ retain_tags updated successfully");
+        await invoke("update_retain_tags_setting", { retainTags: checked });
       } catch (error) {
-        console.error("❌ Failed to update retain_tags:", error);
-        alert("Failed to update retain tagged setting: " + error);
-        // revert on error
+        // alert("Failed to update retain tagged setting: " + error);
         setRetainTagged(!checked);
       }
     });
   };
 
   const handlePurgeCadenceChange = async (newCadence) => {
+    // ✅ block free plan (UI + behavior)
+    if (!planLoading && isFree && newCadence !== "Every 24 hours") {
+      // alert("Upgrade to Pro to change the auto-delete schedule.");
+      setPurgeCadence("Every 24 hours");
+      setAutoPurgeUnpinned(true);
+      return;
+    }
+
     await withMinLoading(async () => {
       const prevCadence = purgeCadence;
 
-      // optimistic update
       setPurgeCadence(newCadence);
-      if (newCadence === "Never") {
-        setAutoPurgeUnpinned(false);
-      } else {
-        setAutoPurgeUnpinned(true);
-      }
-
-      console.log("🔄 Changing purge cadence to:", newCadence);
+      setAutoPurgeUnpinned(newCadence !== "Never");
 
       try {
-        await invoke("update_purge_cadence", {
-          purgeCadence: newCadence,
-        });
-        console.log("✅ Purge cadence updated successfully");
+        await invoke("update_purge_cadence", { purgeCadence: newCadence });
       } catch (error) {
-        console.error("❌ Failed to update purge cadence:", error);
-        alert("Failed to update purge cadence: " + error);
-        // revert on error
+        // alert("Failed to update purge cadence: " + error);
         setPurgeCadence(prevCadence);
       }
     });
@@ -120,11 +118,8 @@ const loadRetainTags = async () => {
   const purgeAllUnpinned = async () => {
     await withMinLoading(async () => {
       try {
-        console.log("🗑️ Purging all unpinned entries...");
-        const result = await invoke("purge_unpinned_entries");
-        console.log(`✅ Purged ${result} unpinned entries`);
+        await invoke("purge_unpinned_entries");
       } catch (error) {
-        console.error("❌ Failed to purge entries:", error);
         alert("Failed to purge entries: " + error);
       }
     });
@@ -133,18 +128,53 @@ const loadRetainTags = async () => {
   const purgeAllUntagged = async () => {
     await withMinLoading(async () => {
       try {
-        console.log("🏷️ Purging all untagged entries...");
-        const result = await invoke("purge_untagged_entries");
-        console.log(`✅ Purged ${result} untagged entries`);
+        await invoke("purge_untagged_entries");
       } catch (error) {
-        console.error("❌ Failed to purge entries:", error);
         alert("Failed to purge entries: " + error);
       }
     });
   };
 
+  const isOptionLocked = (option) =>
+    !planLoading && isFree && option !== "Every 24 hours";
+
   return (
     <div className="space-y-6">
+{!planLoading && isFree && (
+  <div className="rounded-xl border border-gray-200 bg-gray-100 p-3 mb-2">
+  <div className="flex items-start gap-2">
+    <Info size={16} className="text-blue-500 mt-0.5" />
+    <div className="flex-1">
+      <div className="text-sm font-semibold text-gray-800">Free Plan Limits</div>
+
+      <div className="mt-2 flex items-center justify-between text-xs text-gray-600">
+        <span>Pinned Clips:</span>
+        <span className="font-semibold text-orange-500">3/3</span>
+      </div>
+
+      <div className="mt-2 h-2 w-full rounded-full bg-gray-200 overflow-hidden">
+        <div className="h-full rounded-full bg-orange-400" style={{ width: "100%" }} />
+      </div>
+
+      <div className="mt-2 text-[12px] text-gray-600">
+        <span className="text-gray-400">•</span> Auto-deletion: Every 24 hours only
+      </div>
+
+      <button
+  type="button"
+  onClick={() => invoke("open_pricing_window")}
+  className="mt-3 w-full h-9 rounded-lg text-sm font-semibold text-white flex items-center justify-center gap-2
+             bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 hover:opacity-95 active:opacity-90"
+>
+  <Crown size={16} />
+  Upgrade to Pro
+</button>
+
+    </div>
+  </div>
+</div>
+
+)}
       {/* Delete Section */}
       <div className="space-y-3">
         <h3 className="text-sm font-medium text-gray-700">Delete Unpinned Items</h3>
@@ -164,46 +194,64 @@ const loadRetainTags = async () => {
         </div>
 
         {isLoading && (
-          <p className="text-xs text-gray-500 animate-pulse">
-            Saving changes...
-          </p>
+          <p className="text-xs text-gray-500 animate-pulse">Saving changes...</p>
         )}
       </div>
 
-      {/* Purge Cadence Section */}
+      {/* Purge Cadence Section (UI like screenshot) */}
       <div className="space-y-2">
-        <h3 className="text-sm font-medium text-gray-700">
-          Schedule deleting unpinned items
-        </h3>
-        <div className="space-y-1.5">
-          {availablePurgeOptions.map((option) => (
-            <div key={option} className="flex items-center gap-2">
-              <input
-                type="radio"
-                id={option}
-                name="purgeCadence"
-                checked={purgeCadence === option}
-                onChange={() => handlePurgeCadenceChange(option)}
-                className="w-4 h-4 text-blue-500 focus:ring-blue-400"
-                disabled={isLoading}
-              />
-              <label htmlFor={option} className="text-sm text-gray-700">
-                {option}
-              </label>
-            </div>
-          ))}
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium text-gray-700">
+            Schedule deleting unpinned items
+          </h3>
+          {!planLoading && isFree && <Lock size={14} className="text-gray-400" />}
         </div>
+
+        <div className="space-y-1.5">
+          {availablePurgeOptions.map((option) => {
+            const locked = isOptionLocked(option);
+
+            return (
+              <div key={option} className="flex items-center justify-between">
+                <label className={`flex items-start gap-2 ${locked ? "opacity-50" : ""}`}>
+                  <input
+                    type="radio"
+                    id={option}
+                    name="purgeCadence"
+                    checked={purgeCadence === option}
+                    onChange={() => handlePurgeCadenceChange(option)}
+                    className="w-4 h-4 text-blue-500 focus:ring-blue-400 mt-0.5"
+                    disabled={isLoading}
+                  />
+
+                  <div className="leading-tight">
+                    <div className="text-sm text-gray-700">{option}</div>
+                    {locked && (
+                      <div className="text-[11px] text-orange-400">Paid plan only</div>
+                    )}
+                  </div>
+                </label>
+
+                {locked && <Lock size={14} className="text-gray-400" />}
+              </div>
+            );
+          })}
+        </div>
+
+        {!planLoading && isFree && (
+          <p className="text-xs text-gray-500">
+            Free plan is limited to <span className="font-semibold">Every 24 hours</span>.
+            Upgrade to unlock more schedules.
+          </p>
+        )}
       </div>
 
       {/* Delete now button */}
       <div className="pt-4 space-y-4">
         <button
           onClick={() => {
-            if (retainTagged) {
-              purgeAllUntagged();
-            } else {
-              purgeAllUnpinned();
-            }
+            if (retainTagged) purgeAllUntagged();
+            else purgeAllUnpinned();
           }}
           className="px-4 py-2 text-sm border border-red-300 rounded-lg bg-white text-red-700 cursor-pointer transition-colors duration-200 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
           disabled={isLoading}

@@ -1,6 +1,6 @@
 // src/db/sqlite_users_repository.rs
 
-use crate::db::schemas::users::{User, NewUser, UpdateUser, UserResponse, PurgeCadence};
+use crate::db::schemas::users::{User, NewUser, UpdateUser, UserResponse, PurgeCadence, Plan};
 use chrono::{DateTime, Utc};
 use sqlx::{FromRow, Error, SqlitePool};
 use std::str::FromStr;
@@ -18,12 +18,10 @@ struct SqliteUserRow {
     pub created_at: DateTime<Utc>,
     pub organization_id: Option<String>,
     pub purge_cadence: String,
-    // Optional extra fields in SQLite schema; they will be ignored by User
     pub updated_at: DateTime<Utc>,
     pub last_login_at: DateTime<Utc>,
     pub retain_tags: bool,
-    // If you later add is_active to SQLite, you can include:
-    // pub is_active: bool,
+    pub plan: String,
 }
 
 impl From<SqliteUserRow> for User {
@@ -38,6 +36,8 @@ impl From<SqliteUserRow> for User {
             organization_id: row.organization_id,
             purge_cadence: cadence,
             retain_tags: row.retain_tags,
+            plan: Plan::from_str(&row.plan).unwrap_or_default(),
+
         }
     }
 }
@@ -51,8 +51,8 @@ impl SqliteUsersRepository {
         let row = sqlx::query_as::<_, SqliteUserRow>(
             r#"
             INSERT INTO users 
-                (firebase_uid, email, display_name, created_at, organization_id, purge_cadence)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            (firebase_uid, email, display_name, created_at, organization_id, purge_cadence, plan)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             RETURNING *
             "#,
         )
@@ -61,7 +61,9 @@ impl SqliteUsersRepository {
         .bind(&new_user.display_name)
         .bind(now)
         .bind(&new_user.organization_id)
-        .bind(PurgeCadence::Never.as_str()) // TEXT in SQLite
+        .bind(PurgeCadence::Every24Hours.as_str())
+        .bind(Plan::Free.as_str())
+
         .fetch_one(pool)
         .await;
 
@@ -142,7 +144,7 @@ impl SqliteUsersRepository {
         let user = sqlx::query_as::<_, User>(
             r#"
             SELECT id, firebase_uid, email, display_name, organization_id,
-                   retain_tags, purge_cadence,
+                   retain_tags, purge_cadence, plan,
                    created_at, updated_at
             FROM users
             WHERE organization_id = ?
@@ -156,6 +158,24 @@ impl SqliteUsersRepository {
         Ok(user)
     }
 
+    pub async fn get_user_plan(
+        pool: &SqlitePool,
+        organization_id: &str,
+    ) -> Result<Plan, sqlx::Error> {
+        let plan_str = sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT plan
+            FROM users
+            WHERE organization_id = ?1
+            LIMIT 1
+            "#,
+        )
+        .bind(organization_id)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(Plan::from_str(&plan_str).unwrap_or_default())
+    }
 
 
     /// Update user fields (display_name, purge_cadence)
@@ -200,7 +220,7 @@ impl SqliteUsersRepository {
         let effective_cadence = if auto_purge_unpinned {
             purge_cadence
         } else {
-            PurgeCadence::Never
+            PurgeCadence::Every24Hours
         };
 
         let row = sqlx::query_as::<_, SqliteUserRow>(

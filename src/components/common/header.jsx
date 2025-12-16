@@ -3,7 +3,15 @@ import React from "react";
 import { Search, X, LogOut, Settings } from "lucide-react";
 import { Link } from "react-router-dom";
 
-export default function Header({ q, setQ, onLogout, isLoggingOut }) {
+export default function Header({
+  q,
+  setQ,
+  onLogout,
+  isLoggingOut,
+  showUpgradeBanner = false,   // ✅ NEW
+  onUpgradeClick,              // ✅ optional
+  onDismissUpgrade,            // ✅ optional
+}) {
   return (
     <div className="bg-white p-2 flex-shrink-0">
       {/* Top row: logo + title + settings + logout */}
@@ -38,6 +46,29 @@ export default function Header({ q, setQ, onLogout, isLoggingOut }) {
         </div>
       </div>
 
+      {/* ✅ Upgrade banner (ABOVE search bar) */}
+      {showUpgradeBanner && (
+        <div className="mb-1 px-2 py-1 rounded-md border border-yellow-200 bg-yellow-50 text-[11px] text-yellow-800 flex items-center justify-between">
+          <span>Limit reached — upgrade plan</span>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onUpgradeClick}
+              className="font-semibold underline"
+            >
+              Upgrade
+            </button>
+            <button
+              onClick={onDismissUpgrade}
+              className="text-yellow-900/70 hover:text-yellow-900"
+              title="Dismiss"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Search bar */}
       <div className="relative">
         <Search
@@ -62,5 +93,3 @@ export default function Header({ q, setQ, onLogout, isLoggingOut }) {
     </div>
   );
 }
-
-

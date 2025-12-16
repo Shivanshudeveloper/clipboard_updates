@@ -17,29 +17,26 @@ fn to_sqlite_ts(dt: DateTime<Utc>) -> String {
 
 
 fn get_database_path() -> PathBuf {
-    // Get proper application data directory
     if let Some(proj_dirs) = ProjectDirs::from("com", "ClipTray", "ClipTray") {
         let data_dir = proj_dirs.data_dir();
         
-        // Create directory if it doesn't exist
         if !data_dir.exists() {
             if let Err(e) = std::fs::create_dir_all(data_dir) {
                 eprintln!("Warning: Failed to create data directory: {}", e);
-                // Fallback to current directory
                 return std::env::current_dir()
                     .unwrap_or_else(|_| PathBuf::from("."))
-                    .join("cliptray_offline2.db");
+                    .join("cliptray_offline3.db");
             }
         }
         
-        let db_path = data_dir.join("cliptray_offline2.db");
+        let db_path = data_dir.join("cliptray_offline3.db");
         info!("Resolved database path: {:?}", db_path);
         db_path
     } else {
         // Fallback to current directory
         let current_dir = std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."));
-        let db_path = current_dir.join("cliptray_offline2.db");
+        let db_path = current_dir.join("cliptray_offline3.db");
         info!("Using fallback database path: {:?}", db_path);
         db_path
     }
@@ -93,7 +90,8 @@ pub async fn create_sqlite_tables(pool: &SqlitePool) -> Result<(), Box<dyn std::
             purge_cadence TEXT NOT NULL DEFAULT 'never',
             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             last_login_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            retain_tags BOOLEAN NOT NULL DEFAULT FALSE
+            retain_tags BOOLEAN NOT NULL DEFAULT FALSE,
+            plan TEXT NOT NULL DEFAULT 'free'
         )
         "#
     )

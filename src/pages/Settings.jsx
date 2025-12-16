@@ -1,8 +1,9 @@
 import React, { useState } from "react";
 import GeneralSettings from "../components/settings/General";
 import TagsSettings from "../components/settings/Tags";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Info, Crown } from "lucide-react";
 import { Link } from 'react-router-dom';
+
 
 const ClipTraySettings = () => {
   const [activeTab, setActiveTab] = useState("General");
@@ -51,6 +52,10 @@ const ClipTraySettings = () => {
         ))}
       </div>
 
+      {/* ✅ Free Plan Limits / Upgrade box (below General/Tags buttons) */}
+
+
+
       <hr className="border-none border-t border-gray-300 my-2.5 mb-3.5" />
 
       {/* General Settings */}
@@ -72,6 +77,8 @@ const ClipTraySettings = () => {
       {activeTab === "Tags" && (
         <TagsSettings />
       )}
+
+      
     </div>
   );
 };

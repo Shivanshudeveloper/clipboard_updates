@@ -78,7 +78,7 @@ pub async fn create_tables(pool: &PgPool) -> Result<(), Box<dyn std::error::Erro
             email TEXT NOT NULL,
             display_name TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            purge_cadence purge_cadence NOT NULL DEFAULT 'never',
+            purge_cadence purge_cadence NOT NULL DEFAULT 'every_24_hours',
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             last_login_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             retain_tags BOOLEAN NOT NULL DEFAULT FALSE

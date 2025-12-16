@@ -12,6 +12,7 @@ import ClipTray from "./pages/Landing";
 import LoginPage from "./pages/Login";
 import SignupPage from "./pages/Signup";
 import ClipTraySettings from "./pages/Settings";
+import ClipTrayPricingPage from "./components/common/Pricing";
 
 function App() {
   const [user, setUser] = useState(null);
@@ -150,6 +151,12 @@ function App() {
           path="/settings"
           element={isLoggedIn ? <ClipTraySettings /> : <Navigate to="/login" replace />}
         />
+
+         <Route
+          path="/pricing"
+          element={isLoggedIn ? <ClipTrayPricingPage /> : <Navigate to="/login" replace />}
+        />
+        
       </Routes>
     </Router>
   );
