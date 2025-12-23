@@ -141,6 +141,30 @@ pub async fn create_sqlite_tables(pool: &SqlitePool) -> Result<(), Box<dyn std::
     .execute(pool)
     .await?;
 
+    println!("📝 Creating Payments table if not exists...");
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stripe_session_id TEXT NOT NULL,
+            stripe_payment_intent_id TEXT,
+            organization_id TEXT NOT NULL,
+            firebase_uid TEXT NOT NULL,
+            email TEXT NOT NULL,
+            amount_paid INTEGER NOT NULL DEFAULT 0,
+            currency TEXT NOT NULL DEFAULT 'usd',
+            payment_status TEXT NOT NULL DEFAULT 'unpaid' CHECK(payment_status IN ('paid', 'unpaid', 'failed')),
+            plan_type TEXT NOT NULL DEFAULT 'lifetime',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            paid_at DATETIME,
+            metadata TEXT
+        )
+        "#
+    )
+    .execute(pool)
+    .await?;
+
     // === Indexes ===
     println!("📝 Creating indexes if not exist...");
     
@@ -173,6 +197,14 @@ pub async fn create_sqlite_tables(pool: &SqlitePool) -> Result<(), Box<dyn std::
         .execute(pool).await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tags_sync_status ON tags(sync_status)")
     .execute(pool).await?;
+
+    // Payments indexes
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_payments_firebase_uid ON payments(firebase_uid)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_payments_organization_id ON payments(organization_id)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_payments_stripe_session_id ON payments(stripe_session_id)")
+        .execute(pool).await?;
     
     println!("✅ SQLite database tables ready!");
     Ok(())

@@ -23,7 +23,7 @@ export default function ClipItem({ item, tags, onCopy, onMenuOpen, onTagClick, o
 
   return (
     <div 
-      className="bg-white p-1.5 rounded-md shadow-sm cursor-pointer hover:shadow transition-all border border-gray-100"
+      className="bg-white p-1.5 rounded-md shadow-sm cursor-pointer hover:shadow-md hover:border-blue-200 transition-all border border-gray-100"
       onClick={() => onCopy(item.content)}
       onMouseEnter={handleContainerMouseEnter}
       onMouseLeave={handleContainerMouseLeave}
@@ -72,7 +72,7 @@ export default function ClipItem({ item, tags, onCopy, onMenuOpen, onTagClick, o
         {isContainerHovered && (
           <div className="flex gap-0.5">
             <button
-              className="flex items-center gap-0.5 bg-gray-100 rounded-md py-0.5 px-1.5 text-xs font-medium text-gray-600 hover:bg-gray-200"
+              className="flex items-center gap-0.5 bg-gray-100 rounded-md py-0.5 px-1.5 text-xs font-medium text-gray-600 hover:bg-blue-50 hover:text-blue-600 transition-colors"
               onClick={(e) => {
                 e.stopPropagation();
                 onCopy(item.content);
@@ -82,7 +82,7 @@ export default function ClipItem({ item, tags, onCopy, onMenuOpen, onTagClick, o
             </button>
            
            <button
-  className="bg-transparent rounded-full p-0.5 text-gray-600 hover:bg-gray-100"
+  className="bg-transparent rounded-full p-0.5 text-gray-600 hover:bg-gray-100 hover:text-gray-800 transition-colors"
   onClick={(e) => {
     e.stopPropagation();
     const rect = e.currentTarget.getBoundingClientRect();

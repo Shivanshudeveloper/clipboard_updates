@@ -30,11 +30,50 @@ export default function SignupPage() {
   // Check if user is already logged in when component mounts
   useEffect(() => {
     console.log("🔄 SignupPage mounted - checking auth state");
+    
+    // Check Firebase auth state
     const user = auth.currentUser;
-    if (user) {
-      console.log("✅ User already logged in, redirecting to home");
-      navigate("/home", { replace: true });
-    }
+    console.log("Firebase user:", user);
+    
+    // Also check if there's a valid backend session
+    const checkBackendSession = async () => {
+      try {
+        const sessionState = await invoke('debug_session_state');
+        const hasBackendSession = sessionState?.is_logged_in === true;
+        const hasLocalStorageUser = localStorage.getItem('cliptray_user');
+        
+        console.log("Backend session:", sessionState);
+        console.log("LocalStorage user:", hasLocalStorageUser);
+        
+        // Only redirect if BOTH Firebase user exists AND backend session is valid
+        // If only Firebase user exists but no backend session, allow signup (user was logged out)
+        if (user && hasBackendSession) {
+          console.log("✅ User already logged in with valid session, redirecting to home");
+          navigate("/home", { replace: true });
+        } else if (user && !hasBackendSession) {
+          // Firebase user exists but no backend session - clear Firebase state
+          console.log("⚠️ Firebase user exists but no backend session - clearing Firebase auth");
+          try {
+            const { signOut } = await import("firebase/auth");
+            await signOut(auth);
+            localStorage.clear();
+            sessionStorage.clear();
+          } catch (e) {
+            console.error("Failed to clear Firebase auth:", e);
+          }
+        }
+      } catch (error) {
+        console.error("Error checking backend session:", error);
+        // If backend check fails, only redirect if Firebase user exists
+        // (fallback behavior)
+        if (user) {
+          console.log("✅ User already logged in (backend check failed), redirecting to home");
+          navigate("/home", { replace: true });
+        }
+      }
+    };
+    
+    checkBackendSession();
   }, [navigate]);
 
   const clearErrors = () => {

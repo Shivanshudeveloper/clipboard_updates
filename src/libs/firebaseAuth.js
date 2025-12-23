@@ -56,16 +56,27 @@ export const getCurrentUser = () => {
 
 export const signOutUser = async () => {
   try {
+    // Sign out from Firebase first
     await signOut(auth);
     
-    // Clear any stored data
-    localStorage.removeItem('user');
-    localStorage.removeItem('idToken');
+    // Clear ALL localStorage items
+    localStorage.clear();
     
-    console.log("User signed out successfully");
+    // Clear ALL sessionStorage items
+    sessionStorage.clear();
+    
+    // Clear any cookies (if any exist)
+    document.cookie.split(";").forEach((c) => {
+      const eqPos = c.indexOf("=");
+      const name = eqPos > -1 ? c.substr(0, eqPos).trim() : c.trim();
+      document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/`;
+      document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=${window.location.hostname}`;
+    });
+    
+    console.log("✅ User signed out successfully - all storage cleared");
     return true;
   } catch (error) {
-    console.error("Sign out failed:", error);
+    console.error("❌ Sign out failed:", error);
     throw error;
   }
 };

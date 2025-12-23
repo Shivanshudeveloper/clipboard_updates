@@ -5,6 +5,8 @@ use crate::db::users_repository::UsersRepository;
 use crate::db::schemas::users::{NewUser, UserResponse, PurgeCadence, Plan};
 use crate::db::schemas::tags::{Tag, NewTag, UpdateTag, TagResponse};
 use crate::db::tags_repository::TagRepository;
+use crate::db::payments_repository::PaymentsRepository;
+use crate::db::schemas::payments::{NewPayment, PaymentStatus};
 use rand::Rng;
 use serde_json;
 use tauri::{State, Window, Manager};
@@ -495,6 +497,15 @@ pub async fn signup_user(
     organization_id: String,
     db_pools: State<'_, DbPools>,
 ) -> Result<UserResponse, String> {
+    // #region agent log
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use chrono::Utc as ChronoUtc;
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(r"d:\practise\ClipTray\clipboard_updates\.cursor\debug.log") {
+        let _ = writeln!(file, r#"{{"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"command.rs:492","message":"signup_user entry","data":{{"display_name":"{}","organization_id":"{}"}},"timestamp":{}}}"#, display_name, organization_id, ChronoUtc::now().timestamp_millis());
+    }
+    // #endregion
+    
     println!("🔐 Starting signup_user command...");
     println!("👤 Received display name: {}", display_name);
     println!("🏢 Received organization ID: {}", organization_id);
@@ -502,18 +513,40 @@ pub async fn signup_user(
     let (uid, email, _) = verify_firebase_token(&firebase_token).await?;
     println!("✅ Firebase UID verified: {}", uid);
     println!("📧 User email: {}", email);
+    
+    // #region agent log
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(r"d:\practise\ClipTray\clipboard_updates\.cursor\debug.log") {
+        let _ = writeln!(file, r#"{{"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"command.rs:502","message":"Firebase token verified","data":{{"uid":"{}","email":"{}"}},"timestamp":{}}}"#, uid, email, ChronoUtc::now().timestamp_millis());
+    }
+    // #endregion
 
-    let pg_pool = db_pools
-        .pg
-        .as_ref()
-        .ok_or_else(|| "Cloud database (Postgres) not available".to_string())?;
+    // #region agent log
+    let pg_available = db_pools.pg.is_some();
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(r"d:\practise\ClipTray\clipboard_updates\.cursor\debug.log") {
+        let _ = writeln!(file, r#"{{"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"command.rs:506","message":"Checking Postgres availability","data":{{"pg_available":{}}},"timestamp":{}}}"#, pg_available, ChronoUtc::now().timestamp_millis());
+    }
+    // #endregion
+    
     let sqlite_pool: &SqlitePool = &db_pools.sqlite;
+    let pg_pool_opt = db_pools.pg.as_ref();
 
-    if let Some(existing_user) = UsersRepository::get_by_firebase_uid(pg_pool, &uid)
-        .await
-        .map_err(|e| e.to_string())?
-    {
-        println!("❌ User already exists: {}", existing_user.email);
+    // Check if user exists in Postgres (if available) or SQLite
+    let existing_user = if let Some(pg_pool) = pg_pool_opt {
+        UsersRepository::get_by_firebase_uid(pg_pool, &uid)
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        None
+    };
+    
+    if existing_user.is_none() {
+        // Also check SQLite
+        if let Ok(Some(_)) = SqliteUsersRepository::get_by_firebase_uid(sqlite_pool, &uid).await {
+            println!("❌ User already exists in SQLite");
+            return Err("User already exists. Please login instead.".to_string());
+        }
+    } else {
+        println!("❌ User already exists in Postgres: {}", existing_user.as_ref().unwrap().email);
         return Err("User already exists. Please login instead.".to_string());
     }
 
@@ -524,38 +557,113 @@ pub async fn signup_user(
         organization_id: Some(organization_id.clone()),
     };
 
+    // #region agent log
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(r"d:\practise\ClipTray\clipboard_updates\.cursor\debug.log") {
+        let _ = writeln!(file, r#"{{"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"command.rs:549","message":"BEFORE create_user call","data":{{"firebase_uid":"{}","email":"{}","organization_id":"{:?}"}},"timestamp":{}}}"#, new_user.firebase_uid, new_user.email, new_user.organization_id, ChronoUtc::now().timestamp_millis());
+    }
+    // #endregion
+
     println!(
-        "📝 Creating user with data - Email: {}, Display Name: {:?}",
-        new_user.email, new_user.display_name
+        "📝 Creating user with data - Email: {}, Display Name: {:?}, Organization ID: {:?}",
+        new_user.email, new_user.display_name, new_user.organization_id
     );
 
-    match UsersRepository::create_user(pg_pool, &new_user).await {
-        Ok(created) => {
-            println!(
-                "✅ User created successfully - ID: {}, Email: {}, Name: {:?}",
-                created.id, created.email, created.display_name
-            );
-
-            // 🔹 Create local mirror in SQLite
-            if let Err(e) = SqliteUsersRepository::create_user(sqlite_pool, &new_user).await {
-                eprintln!("⚠️ [SQLite] Failed to create local user mirror: {}", e);
+    // ✅ ALWAYS create in SQLite first (offline-first approach)
+    let created = match SqliteUsersRepository::create_user(sqlite_pool, &new_user).await {
+        Ok(user) => {
+            // #region agent log
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(r"d:\practise\ClipTray\clipboard_updates\.cursor\debug.log") {
+                let _ = writeln!(file, r#"{{"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"command.rs:567","message":"SQLite user created SUCCESS","data":{{"user_id":{},"organization_id":"{:?}"}},"timestamp":{}}}"#, user.id, user.organization_id, ChronoUtc::now().timestamp_millis());
             }
-
-            // Set current user session
-            crate::session::set_current_user(
-                created.firebase_uid.clone(),
-                organization_id.clone(),
-                created.email.clone(),
-            );
-            println!("👤 Session set for new user");
-
-            Ok(UserResponse::from(created))
+            // #endregion
+            println!("✅ [SQLite] User created successfully - ID: {}, Organization: {:?}", user.id, user.organization_id);
+            user
         }
         Err(e) => {
-            println!("❌ Failed to create user: {}", e);
-            Err(format!("Failed to create user: {}", e))
+            // #region agent log
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(r"d:\practise\ClipTray\clipboard_updates\.cursor\debug.log") {
+                let _ = writeln!(file, r#"{{"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"command.rs:567","message":"SQLite user creation FAILED","data":{{"error":"{}"}},"timestamp":{}}}"#, e, ChronoUtc::now().timestamp_millis());
+            }
+            // #endregion
+            println!("❌ [SQLite] Failed to create user: {}", e);
+            return Err(format!("Failed to create user in local database: {}", e));
         }
+    };
+
+    // ✅ Try to create in Postgres if available (non-blocking)
+    if let Some(pg_pool) = pg_pool_opt {
+        match UsersRepository::create_user(pg_pool, &new_user).await {
+            Ok(pg_user) => {
+                // #region agent log
+                if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(r"d:\practise\ClipTray\clipboard_updates\.cursor\debug.log") {
+                    let _ = writeln!(file, r#"{{"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"command.rs:580","message":"Postgres user created SUCCESS","data":{{"user_id":{},"organization_id":"{:?}"}},"timestamp":{}}}"#, pg_user.id, pg_user.organization_id, ChronoUtc::now().timestamp_millis());
+                }
+                // #endregion
+                println!("✅ [Postgres] User created successfully - ID: {}, Organization: {:?}", pg_user.id, pg_user.organization_id);
+
+                // ✅ Create initial payment record with 'unpaid' status
+                let initial_payment = NewPayment {
+                    stripe_session_id: format!("init_{}", Uuid::new_v4().to_string().replace("-", "")),
+                    stripe_payment_intent_id: None,
+                    organization_id: organization_id.clone(),
+                    firebase_uid: uid.clone(),
+                    email: email.clone(),
+                    amount_paid: 0, // Will be updated when payment is made
+                    currency: "usd".to_string(),
+                    payment_status: PaymentStatus::Unpaid,
+                    plan_type: "lifetime".to_string(),
+                    paid_at: None,
+                    metadata: None,
+                };
+
+                match PaymentsRepository::create_payment(pg_pool, &initial_payment).await {
+                    Ok(payment) => {
+                        // #region agent log
+                        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(r"d:\practise\ClipTray\clipboard_updates\.cursor\debug.log") {
+                            let _ = writeln!(file, r#"{{"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"command.rs:595","message":"Initial payment record created SUCCESS","data":{{"payment_id":{},"organization_id":"{}"}},"timestamp":{}}}"#, payment.id, payment.organization_id, ChronoUtc::now().timestamp_millis());
+                        }
+                        // #endregion
+                        println!("✅ [Postgres] Initial payment record created - ID: {}, Organization: {}", payment.id, payment.organization_id);
+                    }
+                    Err(e) => {
+                        // #region agent log
+                        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(r"d:\practise\ClipTray\clipboard_updates\.cursor\debug.log") {
+                            let _ = writeln!(file, r#"{{"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"command.rs:595","message":"Initial payment record creation FAILED (non-blocking)","data":{{"error":"{}"}},"timestamp":{}}}"#, e, ChronoUtc::now().timestamp_millis());
+                        }
+                        // #endregion
+                        eprintln!("⚠️ [Postgres] Failed to create initial payment record (non-blocking): {}", e);
+                        // Don't fail signup - payment record can be created later
+                    }
+                }
+            }
+            Err(e) => {
+                // #region agent log
+                if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(r"d:\practise\ClipTray\clipboard_updates\.cursor\debug.log") {
+                    let _ = writeln!(file, r#"{{"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"command.rs:580","message":"Postgres user creation FAILED (non-blocking)","data":{{"error":"{}"}},"timestamp":{}}}"#, e, ChronoUtc::now().timestamp_millis());
+                }
+                // #endregion
+                eprintln!("⚠️ [Postgres] Failed to create user in cloud (will sync later): {}", e);
+                // Don't fail signup - user is created in SQLite, will sync later
+            }
+        }
+    } else {
+        // #region agent log
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(r"d:\practise\ClipTray\clipboard_updates\.cursor\debug.log") {
+            let _ = writeln!(file, r#"{{"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"command.rs:590","message":"Postgres not available - user created in SQLite only","data":{{}},"timestamp":{}}}"#, ChronoUtc::now().timestamp_millis());
+        }
+        // #endregion
+        println!("ℹ️ Postgres not available - user created in SQLite only, will sync when online");
     }
+
+    // Set current user session
+    crate::session::set_current_user(
+        created.firebase_uid.clone(),
+        organization_id.clone(),
+        created.email.clone(),
+    );
+    println!("👤 Session set for new user");
+
+    Ok(UserResponse::from(created))
 }
 
 #[command]
@@ -2264,6 +2372,153 @@ async fn bootstrap_from_cloud_for_org(
     );
 
     Ok(changed_entries + changed_tags)
+}
+
+// ======================= PAYMENT INTEGRATION =======================
+
+#[tauri::command]
+pub async fn open_payment_website(
+    window: Window,
+) -> Result<(), String> {
+    println!("💳 Opening payment website...");
+
+    let firebase_uid = crate::session::get_current_user_id()
+        .ok_or_else(|| "User not logged in".to_string())?;
+
+    let email = crate::session::get_current_user_email()
+        .unwrap_or_else(|| "".to_string());
+
+    let base_url = "https://clipboard-payment-client.vercel.app";
+    // let base_url = "http://localhost:5173";
+    let payment_url = format!("{}?uid={}&email={}", base_url, firebase_uid, email);
+
+    println!("🌐 Opening payment URL: {}", payment_url);
+
+    window
+        .opener()
+        .open_url(payment_url.as_str(), None::<&str>)
+        .map_err(|e| format!("Failed to open payment website: {}", e))?;
+
+    println!("✅ Payment website opened successfully");
+    Ok(())
+}
+
+async fn check_payment_status_internal(firebase_uid: &str) -> Result<bool, String> {
+    let url = format!(
+        // "http://localhost:3000/payment/check-plan/{}",
+        "https://cliptray-payment.onrender.com/payment/check-plan/{}",
+        firebase_uid
+    );
+
+    println!("🔍 Checking payment status for user: {}", firebase_uid);
+
+    let response = reqwest::Client::new()
+        .get(&url)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to check payment status: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "Payment check API returned error: {}",
+            response.status()
+        ));
+    }
+
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse payment status response: {}", e))?;
+
+    let has_active_plan = json
+        .get("hasActivePlan")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if has_active_plan {
+        println!("✅ Payment detected for user: {}", firebase_uid);
+    } else {
+        println!("⏳ No active payment found for user: {}", firebase_uid);
+    }
+
+    Ok(has_active_plan)
+}
+
+#[tauri::command]
+pub async fn check_payment_status(
+    firebase_uid: String,
+) -> Result<bool, String> {
+    check_payment_status_internal(&firebase_uid).await
+}
+
+#[tauri::command]
+pub async fn refresh_user_plan_from_backend(
+    db_pools: State<'_, DbPools>,
+) -> Result<String, String> {
+    let firebase_uid = crate::session::get_current_user_id()
+        .ok_or_else(|| "User not logged in".to_string())?;
+
+    println!("🔄 Refreshing user plan from backend for: {}", firebase_uid);
+
+    // Check payment status from backend
+    let has_active_plan = check_payment_status_internal(&firebase_uid)
+        .await
+        .map_err(|e| format!("Failed to check payment status: {}", e))?;
+
+    let new_plan = if has_active_plan { Plan::Pro } else { Plan::Free };
+
+    let sqlite_pool = &db_pools.sqlite;
+
+    // Update SQLite database
+    if let Some(user) = SqliteUsersRepository::get_by_firebase_uid(sqlite_pool, &firebase_uid)
+        .await
+        .map_err(|e| format!("Failed to get user from SQLite: {}", e))?
+    {
+        sqlx::query(
+            r#"
+            UPDATE users
+            SET plan = ?1, updated_at = CURRENT_TIMESTAMP
+            WHERE firebase_uid = ?2
+            "#,
+        )
+        .bind(new_plan.as_str())
+        .bind(&firebase_uid)
+        .execute(sqlite_pool)
+        .await
+        .map_err(|e| format!("Failed to update plan in SQLite: {}", e))?;
+
+        println!("✅ Updated plan in SQLite to: {}", new_plan.to_display_string());
+    } else {
+        return Err("User not found in local database".to_string());
+    }
+
+    // Update Postgres if available
+    if let Some(pg_pool) = db_pools.pg.as_ref() {
+        if let Some(user) = UsersRepository::get_by_firebase_uid(pg_pool, &firebase_uid)
+            .await
+            .map_err(|e| format!("Failed to get user from Postgres: {}", e))?
+        {
+            sqlx::query(
+                r#"
+                UPDATE users
+                SET plan = $1, updated_at = NOW()
+                WHERE firebase_uid = $2
+                "#,
+            )
+            .bind(&new_plan)
+            .bind(&firebase_uid)
+            .execute(pg_pool)
+            .await
+            .map_err(|e| format!("Failed to update plan in Postgres: {}", e))?;
+
+            println!("✅ Updated plan in Postgres to: {}", new_plan.to_display_string());
+        } else {
+            println!("⚠️ User not found in Postgres, skipping cloud update");
+        }
+    }
+
+    Ok(new_plan.to_display_string().to_string())
 }
 
 

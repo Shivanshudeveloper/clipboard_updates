@@ -1,6 +1,8 @@
 use crate::db::schemas::users::{User, NewUser, UpdateUser, UserResponse, PurgeCadence, Plan};
 use sqlx::{PgPool};
 use chrono::Utc;
+use std::fs::OpenOptions;
+use std::io::Write;
 
 pub struct UsersRepository;
 
@@ -9,6 +11,21 @@ impl UsersRepository {
         let now = Utc::now();
         
         println!("🗄️ Attempting to insert user into database...");
+        
+        // #region agent log
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(r"d:\practise\ClipTray\clipboard_updates\.cursor\debug.log") {
+            let _ = writeln!(file, r#"{{"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"users_repository.rs:8","message":"create_user entry","data":{{"firebase_uid":"{}","email":"{}"}},"timestamp":{}}}"#, new_user.firebase_uid, new_user.email, chrono::Utc::now().timestamp_millis());
+        }
+        // #endregion
+        
+        // #region agent log
+        let purge_cadence_bind = PurgeCadence::Never;
+        let plan_bind = Plan::Free;
+        // let plan_bind_2 = Plan::Free;
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(r"d:\practise\ClipTray\clipboard_updates\.cursor\debug.log") {
+            let _ = writeln!(file, r#"{{"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"users_repository.rs:26","message":"BEFORE bind values","data":{{"purge_cadence_bind":"{:?}","plan_bind":"{:?}"}},"timestamp":{}}}"#, purge_cadence_bind, plan_bind, chrono::Utc::now().timestamp_millis());
+        }
+        // #endregion
         
         let result = sqlx::query_as::<_, User>(
             r#"
@@ -23,11 +40,23 @@ impl UsersRepository {
         .bind(&new_user.display_name)
         .bind(now)
         .bind(&new_user.organization_id)
-        .bind(PurgeCadence::Never) // Always default to Never for new users
-        .bind(PurgeCadence::Never)
-        .bind(Plan::Free)
+        .bind(purge_cadence_bind) // Always default to Never for new users - binds to $6 (purge_cadence)
+        .bind(plan_bind) // Binds Plan::Free to $7 (plan column) - CORRECT!
         .fetch_one(pool)
         .await;
+        
+        // #region agent log
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(r"d:\practise\ClipTray\clipboard_updates\.cursor\debug.log") {
+            match &result {
+                Ok(_) => {
+                    let _ = writeln!(file, r#"{{"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"users_repository.rs:30","message":"AFTER query execution - SUCCESS","data":{{}},"timestamp":{}}}"#, chrono::Utc::now().timestamp_millis());
+                }
+                Err(e) => {
+                    let _ = writeln!(file, r#"{{"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"users_repository.rs:30","message":"AFTER query execution - ERROR","data":{{"error":"{}"}},"timestamp":{}}}"#, e, chrono::Utc::now().timestamp_millis());
+                }
+            }
+        }
+        // #endregion
 
         match &result {
             Ok(user) => println!("✅ User inserted successfully - ID: {}, Purge Cadence: {}", 

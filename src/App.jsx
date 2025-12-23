@@ -139,6 +139,7 @@ function App() {
           path="/login"
           element={!isLoggedIn ? <LoginPage /> : <Navigate to="/home" replace />}
         />
+        console.log("isLoggedIn", isLoggedIn);
         <Route
           path="/signup"
           element={!isLoggedIn ? <SignupPage /> : <Navigate to="/home" replace />}

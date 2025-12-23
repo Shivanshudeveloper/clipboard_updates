@@ -6,10 +6,10 @@ export default function Tags({ tags, activeTag, setActiveTag, tagsLoading, tagsE
       <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
         {/* All button */}
         <button
-          className={`flex items-center gap-0.5 py-0.5 px-1.5 text-xs font-medium rounded-full border transition-all whitespace-nowrap ${
+          className={`flex items-center gap-0.5 py-0.5 px-1.5 text-xs font-medium rounded-full border transition-all whitespace-nowrap shadow-sm ${
             activeTag === "all"
-              ? "bg-blue-500 text-white border-transparent"
-              : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+              ? "bg-blue-500 text-white border-transparent shadow-md"
+              : "bg-white text-gray-700 border-gray-300 hover:border-gray-400 hover:shadow"
           }`}
           onClick={() => setActiveTag("all")}
         >
@@ -23,10 +23,10 @@ export default function Tags({ tags, activeTag, setActiveTag, tagsLoading, tagsE
           tags.map((tag) => (
             <button
               key={tag.id}
-              className={`flex items-center gap-0.5 py-0.5 px-1.5 text-xs font-medium rounded-full border transition-all whitespace-nowrap ${
+              className={`flex items-center gap-0.5 py-0.5 px-1.5 text-xs font-medium rounded-full border transition-all whitespace-nowrap shadow-sm ${
                 activeTag === tag.name
-                  ? "text-white border-transparent"
-                  : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+                  ? "text-white border-transparent shadow-md"
+                  : "bg-white text-gray-700 border-gray-300 hover:border-gray-400 hover:shadow"
               }`}
               style={{
                 backgroundColor:

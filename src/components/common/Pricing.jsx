@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   Clock,
   Lightbulb,
@@ -9,6 +9,8 @@ import {
   CheckCircle2,
   Download,
 } from "lucide-react";
+import { usePayment } from "../../hooks/usePayment";
+import { useUserPlan } from "../../hooks/useUserPlan";
 
 const features = [
   { icon: Clock, title: "Unlimited Clipboard History", desc: "Never lose important snippets." },
@@ -30,6 +32,28 @@ const FeatureCard = ({ icon: Icon, title, desc }) => (
 );
 
 export default function ClipTrayPricingPage() {
+  const { openPaymentWebsite, isPolling, pollingError } = usePayment();
+  const { refetchPlan } = useUserPlan();
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const handleUpgrade = async () => {
+    setIsProcessing(true);
+    const opened = await openPaymentWebsite();
+    if (opened) {
+      // Polling will start automatically
+      // Refresh plan when polling detects payment
+      const checkInterval = setInterval(async () => {
+        if (!isPolling) {
+          clearInterval(checkInterval);
+          await refetchPlan();
+          setIsProcessing(false);
+        }
+      }, 1000);
+    } else {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-white">
       <div className="mx-auto max-w-6xl px-4 py-10">
@@ -105,10 +129,12 @@ export default function ClipTrayPricingPage() {
 
                 <button
                   type="button"
-                  className="mt-8 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-6 py-4 text-base font-bold text-blue-700 shadow-sm transition hover:bg-white/95"
+                  onClick={handleUpgrade}
+                  disabled={isPolling || isProcessing}
+                  className="mt-8 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-6 py-4 text-base font-bold text-blue-700 shadow-sm transition hover:bg-white/95 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Download className="h-5 w-5" />
-                  Get Lifetime Access
+                  {isPolling || isProcessing ? "Processing..." : "Get Lifetime Access"}
                 </button>
 
                 <div className="mt-4 text-center text-xs text-white/80">
@@ -142,12 +168,21 @@ export default function ClipTrayPricingPage() {
           </div>
           <button
             type="button"
-            className="inline-flex items-center justify-center rounded-2xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+            onClick={handleUpgrade}
+            disabled={isPolling || isProcessing}
+            className="inline-flex items-center justify-center rounded-2xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Get Lifetime Access — $29
+            {isPolling || isProcessing ? "Processing..." : "Get Lifetime Access — $29"}
           </button>
         </div>
       </div>
+      {pollingError && (
+        <div className="mt-4 mx-auto max-w-6xl px-4">
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            {pollingError}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

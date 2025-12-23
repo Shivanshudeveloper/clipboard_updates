@@ -80,6 +80,11 @@ use command::{
     check_for_updates,
     sync_clipboard_to_cloud,
     bootstrap_cloud_now,
+
+    // Payment operations
+    open_payment_website,
+    check_payment_status,
+    refresh_user_plan_from_backend,
 };
 
 use crate::updater::Updater;
@@ -239,6 +244,11 @@ fn main() {
             check_database_status,
             sync_clipboard_to_cloud,
             bootstrap_cloud_now,
+
+            // Payment operations
+            open_payment_website,
+            check_payment_status,
+            refresh_user_plan_from_backend,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

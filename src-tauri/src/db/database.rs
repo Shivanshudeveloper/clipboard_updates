@@ -41,7 +41,7 @@ pub async fn create_db_pool() -> Result<PgPool, Box<dyn std::error::Error>> {
         .await?;    
     println!("Database connected successfully!");    
     // Create tables if they don't exist
-    // create_tables(&pool).await?;    
+    create_tables(&pool).await?;    
     Ok(pool)
 }
 
@@ -67,6 +67,8 @@ pub async fn create_tables(pool: &PgPool) -> Result<(), Box<dyn std::error::Erro
     )
     .execute(pool)
     .await?;
+
+    // Note: payment_status is VARCHAR(20) to match NestJS backend schema, not an enum type
 
     println!("📝 Creating Users table if not exists...");
     sqlx::query(
@@ -125,6 +127,30 @@ pub async fn create_tables(pool: &PgPool) -> Result<(), Box<dyn std::error::Erro
     .execute(pool)
     .await?;
 
+    println!("📝 Creating Payments table if not exists...");
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS payments (
+            id BIGSERIAL PRIMARY KEY,
+            stripe_session_id VARCHAR(255) UNIQUE NOT NULL,
+            stripe_payment_intent_id VARCHAR(255),
+            organization_id VARCHAR(255) NOT NULL,
+            firebase_uid VARCHAR(255) NOT NULL,
+            email VARCHAR(255) NOT NULL,
+            amount_paid INTEGER NOT NULL DEFAULT 0,
+            currency VARCHAR(10) NOT NULL DEFAULT 'usd',
+            payment_status VARCHAR(20) NOT NULL DEFAULT 'unpaid',
+            plan_type VARCHAR(50) NOT NULL DEFAULT 'lifetime',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            paid_at TIMESTAMPTZ,
+            metadata JSONB
+        )
+        "#
+    )
+    .execute(pool)
+    .await?;
+
     // === Indexes ===
     println!("📝 Creating indexes if not exist...");
     
@@ -152,6 +178,16 @@ pub async fn create_tables(pool: &PgPool) -> Result<(), Box<dyn std::error::Erro
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name)")
         .execute(pool).await?;
     sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_organization_name_unique ON tags(organization_id, LOWER(name))")
+        .execute(pool).await?;
+
+    // Payments indexes
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_payments_firebase_uid ON payments(firebase_uid)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_payments_organization_id ON payments(organization_id)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_payments_stripe_session_id ON payments(stripe_session_id)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(payment_status)")
         .execute(pool).await?;
     
     println!("✅ Database tables ready!");

@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Lock ,Info, Crown} from "lucide-react";
 import { useUserPlan } from "../../hooks/useUserPlan"; // adjust path if needed
-import { Link } from 'react-router-dom';
+import { usePayment } from "../../hooks/usePayment";
+import { Link, useNavigate } from 'react-router-dom';
 
 const GeneralSettings = ({
   startAtLogin,
@@ -16,7 +17,9 @@ const GeneralSettings = ({
   const [isLoading, setIsLoading] = useState(false);
   const [retainTagged, setRetainTagged] = useState(false);
 
-  const { isFree, loading: planLoading } = useUserPlan();
+  const { isFree, loading: planLoading, refetchPlan } = useUserPlan();
+  const { openPaymentWebsite, isPolling, pollingError } = usePayment();
+  const navigate = useNavigate();
 
   const MIN_LOADING_MS = 200;
 
@@ -162,13 +165,29 @@ const GeneralSettings = ({
 
       <button
   type="button"
-  onClick={() => invoke("open_pricing_window")}
+  onClick={async () => {
+    const opened = await openPaymentWebsite();
+    if (opened) {
+      // Polling will start automatically
+      // Refresh plan when polling detects payment
+      const checkInterval = setInterval(async () => {
+        if (!isPolling) {
+          clearInterval(checkInterval);
+          await refetchPlan();
+        }
+      }, 1000);
+    }
+  }}
+  disabled={isPolling}
   className="mt-3 w-full h-9 rounded-lg text-sm font-semibold text-white flex items-center justify-center gap-2
-             bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 hover:opacity-95 active:opacity-90"
+             bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 hover:opacity-95 active:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
 >
   <Crown size={16} />
-  Upgrade to Pro
+  {isPolling ? "Checking payment..." : "Upgrade to Pro"}
 </button>
+      {pollingError && (
+        <p className="mt-2 text-xs text-red-600">{pollingError}</p>
+      )}
 
     </div>
   </div>

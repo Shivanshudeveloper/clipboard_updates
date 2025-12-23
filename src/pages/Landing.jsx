@@ -337,14 +337,26 @@ const openContextMenu = (itemId, rect) => {
   const handleLogout = async () => {
     try {
       setIsLoggingOut(true);
+      
+      // Sign out from Firebase (this will clear Firebase auth state)
       await signOutUser();
+      
+      // Clear backend session
       const result = await invoke('logout_user');
       console.log(result);
+      
+      // signOutUser already clears all localStorage and sessionStorage,
+      // but ensure cliptray_user is removed if it exists
       localStorage.removeItem('cliptray_user');
       sessionStorage.clear();
       
+      // Force navigation to login and reload to clear any cached state
       navigate("/login");
+      
+      // Small delay to ensure navigation completes before reload
+      setTimeout(() => {
       window.location.reload();
+      }, 100);
     } catch (error) {
       console.error("Logout failed:", error);
       showNotification("Logout failed. Please try again.", "error");
@@ -681,7 +693,7 @@ const openContextMenu = (itemId, rect) => {
       onLogout={handleLogout}
       isLoggingOut={isLoggingOut}
       showUpgradeBanner={showPinLimitBanner}
-      onUpgradeClick={() => navigate("/settings")}   // or your upgrade page
+      onUpgradeClick={() => navigate("/pricing")}
       onDismissUpgrade={() => setShowPinLimitBanner(false)}
       />
 
@@ -701,9 +713,11 @@ const openContextMenu = (itemId, rect) => {
       <div className="flex-1 overflow-hidden flex flex-col p-2">
         {/* Pinned */}
         <div className="mb-2 flex flex-col" style={{ height: '50%', minHeight: '40%' }}>
-          <div className="flex justify-between items-center p-2 text-xs font-semibold text-gray-500 uppercase tracking-wider flex-shrink-0">
+          <div className="flex justify-between items-center p-2 text-xs font-semibold text-gray-600 uppercase tracking-wider flex-shrink-0">
+            <span className="flex items-center gap-1.5">
             <span>Pinned</span>
-            <span className="bg-gray-100 text-gray-500 text-xs font-semibold py-0.5 px-1.5 rounded-full">
+            </span>
+            <span className="bg-blue-50 text-blue-600 text-xs font-semibold py-0.5 px-1.5 rounded-full border border-blue-200">
               {pinned.length}
             </span>
           </div>
@@ -733,17 +747,17 @@ const openContextMenu = (itemId, rect) => {
 
         {/* Recent */}
         <div className="flex flex-col" style={{ height: '40%', minHeight: '50%' }}>
-          <div className="flex justify-between items-center p-2 text-xs font-semibold text-gray-500 uppercase tracking-wider flex-shrink-0">
+          <div className="flex justify-between items-center p-2 text-xs font-semibold text-gray-600 uppercase tracking-wider flex-shrink-0">
             <div className="flex items-center gap-2">
             <span>Recent</span>
 
             {isFree && (
-              <span className="normal-case text-[10px] font-medium text-gray-400">
+              <span className="normal-case text-[10px] font-medium text-orange-500 bg-orange-50 px-1.5 py-0.5 rounded border border-orange-200">
                 Deletes every 24 hrs
               </span>
             )}
             </div>
-            <span className="bg-gray-100 text-gray-500 text-xs font-semibold py-0.5 px-1.5 rounded-full">
+            <span className="bg-gray-100 text-gray-600 text-xs font-semibold py-0.5 px-1.5 rounded-full border border-gray-200">
               {recent.length}
             </span>
           </div>

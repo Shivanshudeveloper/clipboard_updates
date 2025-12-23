@@ -16,13 +16,14 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            github_owner: "Shivanshudeveloper",
+            
+            github_owner: "github.com/Shivanshudeveloper",
             github_repo: "clipboard_updates",
             current_version: "0.2.6",
-            database_url: "DATABASE_URL",
-            firebase_project_id: "PROJECT_ID",
-            client_id: "YOUR_CLIENT_ID",
-            client_secret: "YOUR_CLIENT_SECRET",
+            database_url: "Database_URL_Here",
+            firebase_project_id: "firebase_project_id_here",
+            client_id: "client_id_here.apps.googleusercontent.com",
+            client_secret: "client_secret_here",
         }
     }
 }
